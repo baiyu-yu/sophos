@@ -17,21 +17,23 @@ services:
     restart: unless-stopped
 
   sophos:
-    image: baiyu-yu/sophos:${SOPHOS_VERSION:-latest}
+    # 仓库名必须与 GitHub Actions 里 DOCKERHUB_USERNAME 一致；
+    # 可用 .env 的 SOPHOS_IMAGE 覆盖（只写到仓库名，不带 tag）。
+    image: ${SOPHOS_IMAGE:-baiyuyuyu/sophos}:${SOPHOS_VERSION:-latest}
     build:
       context: .
       dockerfile: Dockerfile
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-sophos}:${POSTGRES_PASSWORD:-sophos_dev}@postgres:5432/${POSTGRES_DB:-sophos}
-      ONEBOT_WS_URL: ${CONTAINER_ONEBOT_WS_URL:-ws://host.docker.internal:3001}
+      ONEBOT_WS_URL: ${CONTAINER_ONEBOT_WS_URL:-ws://10.13.186.67:48086}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "${SOPHOS_PORT:-8080}:8080"
+      - "${SOPHOS_PORT:-3215}:8080"
     volumes:
       - ./logs:/app/logs
       - ./plugins:/app/plugins

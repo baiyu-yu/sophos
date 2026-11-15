@@ -70,16 +70,36 @@ docker compose up -d --build
 
 ## 镜像部署
 
-镜像通过 GitHub Actions 手动构建并推送到 Docker Hub。推送 `dev` 分支后：
+镜像通过 GitHub Actions 手动构建并推送到 Docker Hub。推送分支后：
 
 1. 打开仓库 **Actions** → **Docker** → **Run workflow**；
 2. 选择分支，填写版本标签（默认 `latest`，也可填 `v1.0.0` 等）；
 3. 运行完成后镜像位于 `docker.io/<DOCKERHUB_USERNAME>/sophos:<版本>`。
 
-部署时用 `SOPHOS_VERSION` 选择版本：
+> 重要：`<DOCKERHUB_USERNAME>` 是 Actions 里配置的 secret 值，不是 GitHub 用户名。
+> 本仓库默认使用 `baiyuyuyu/sophos`；如果你换了自己的 Docker Hub 账号，记得同步
+> 修改 compose 的 `SOPHOS_IMAGE`。
+
+在 `.env` 里指定实际仓库名（只写仓库，不带 tag）：
 
 ```bash
-SOPHOS_VERSION=v1.0.0 docker compose up -d --pull always
+SOPHOS_IMAGE=<你的DockerHub用户名>/sophos
+SOPHOS_VERSION=v1.0.0   # 或 latest
+```
+
+然后：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+如果 Docker Hub 仓库是**私有**的，需要先登录；另外国内镜像加速器
+（如 `docker.m.daocloud.io`）通常无法代理私有仓库，会返回 403，此时可临时直连
+Docker Hub 或换用支持私有仓库的加速器：
+
+```bash
+docker login -u <你的DockerHub用户名>
 ```
 
 ### 配置 Docker Hub 凭据
@@ -90,6 +110,6 @@ SOPHOS_VERSION=v1.0.0 docker compose up -d --pull always
 | Name | 说明 |
 | --- | --- |
 | `DOCKERHUB_TOKEN` | 必填。Docker Hub 的 Access Token（Docker Hub → Account settings → Personal access tokens，权限选 Read & Write） |
-| `DOCKERHUB_USERNAME` | 可选。Docker Hub 用户名；留空时使用仓库所有者（`baiyu-yu`） |
+| `DOCKERHUB_USERNAME` | 必填。Docker Hub 用户名；必须与 compose 里 `SOPHOS_IMAGE` 的用户名一致 |
 
 实际的 `.env`、数据库数据和日志不会打包进镜像或提交到 Git。
