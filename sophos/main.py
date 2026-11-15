@@ -1,7 +1,6 @@
 """Sophos — Application entry point."""
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -17,13 +16,12 @@ from sophos.adapter_router import AdapterRouter
 from sophos.api import create_app
 from sophos.cleanup import run_cleanup_loop
 from sophos.config import settings
+from sophos.connections import OneBotConnectionManager
 from sophos.db import close_db, init_db
 from sophos.llm.provider_manager import ProviderManager
 from sophos.memory.store import MemoryStore
 from sophos.message_store import MessageStore
 from sophos.messaging import MessageService
-from sophos.onebot_adapter import OneBot11Adapter
-from sophos.onebot_api import OneBotAPI
 from sophos.pipeline import INGEST_STAGES, RESPONSE_STAGES, Pipeline, PipelineContext
 from sophos.platform import PlatformAdapter
 from sophos.platform_store import PlatformStore
@@ -55,84 +53,6 @@ async def handle_event(
     with observability.scope(conversation_id=ctx.conversation_id):
         await _ingest.run(ctx)
         await _response.run(ctx)
-
-
-async def ws_loop(
-    store: MessageStore,
-    platform_store: PlatformStore,
-    router: AdapterRouter,
-    message_service: MessageService,
-    provider_mgr: ProviderManager,
-    memory_store: MemoryStore | None = None,
-) -> None:
-    """连接 NapCat WebSocket 并持续监听消息。"""
-    ws_url = settings.onebot_ws_url
-    ws_token = settings.onebot_ws_token
-    headers = {"Authorization": f"Bearer {ws_token}"} if ws_token else {}
-
-    async with aiohttp.ClientSession() as session:
-        while True:
-            api: OneBotAPI | None = None
-            adapter: OneBot11Adapter | None = None
-            try:
-                logger.info("Connecting to %s ...", ws_url)
-                async with session.ws_connect(ws_url, headers=headers) as ws:
-                    logger.info("Connected!")
-                    api = OneBotAPI(ws)
-                    if settings.bot_id:
-                        adapter = await OneBot11Adapter.create(
-                            api=api,
-                            platform_store=platform_store,
-                            self_external_id=str(settings.bot_id),
-                            display_name=settings.bot_nickname,
-                        )
-                        router.register(adapter)
-
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            data: dict[str, Any] = json.loads(msg.data)
-                            logger.log(5, "WS ← %s", msg.data)
-
-                            # 分流：API 响应 → 填充 Future；事件 → 返回给我们处理
-                            event = api.dispatch(data)
-                            if event is not None:
-                                if adapter is None:
-                                    self_id = str(event.get("self_id") or settings.bot_id or "")
-                                    if not self_id:
-                                        logger.warning("Ignoring OneBot event without self_id")
-                                        continue
-                                    adapter = await OneBot11Adapter.create(
-                                        api=api,
-                                        platform_store=platform_store,
-                                        self_external_id=self_id,
-                                        display_name=settings.bot_nickname,
-                                    )
-                                    router.register(adapter)
-                                # 事件处理放到独立 Task，不阻塞 WS 读取循环
-                                asyncio.create_task(
-                                    handle_event(
-                                        adapter,
-                                        event,
-                                        message_service,
-                                        store,
-                                        provider_mgr,
-                                        session,
-                                        memory_store=memory_store,
-                                    )
-                                )
-
-                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                            logger.warning("WebSocket closed or error: %s", msg.data)
-                            break
-            except (aiohttp.ClientError, ConnectionError, OSError) as e:
-                logger.warning("Connection failed: %s. Retrying in 5s...", e)
-            finally:
-                if adapter is not None:
-                    router.unregister(adapter)
-                if api is not None:
-                    api.cancel_all("connection closed")
-
-            await asyncio.sleep(5)  # 断线重连间隔
 
 
 async def start() -> None:
@@ -177,6 +97,34 @@ async def start() -> None:
     )
     await plugin_manager.init()
 
+    # OneBot 连接管理：DB 持久化，支持多连接、手动停止与自动重连
+    async def _on_onebot_event(
+        adapter: PlatformAdapter,
+        event: dict[str, Any],
+        session: aiohttp.ClientSession,
+    ) -> None:
+        await handle_event(
+            adapter,
+            event,
+            message_service,
+            store,
+            provider_mgr,
+            session,
+            memory_store=memory_store,
+        )
+
+    connection_manager = OneBotConnectionManager(
+        pool=pool,
+        platform_store=platform_store,
+        router=router,
+        message_service=message_service,
+        store=store,
+        provider_mgr=provider_mgr,
+        memory_store=memory_store,
+        on_event=_on_onebot_event,
+    )
+    await connection_manager.init()
+
     # 启动 HTTP API server（非阻塞）
     app = await create_app(
         pool=pool,
@@ -185,6 +133,7 @@ async def start() -> None:
         tool_registry=registry,
         adapter_router=router,
         plugin_manager=plugin_manager,
+        connection_manager=connection_manager,
     )
     runner = web.AppRunner(app)
     await runner.setup()
@@ -196,16 +145,10 @@ async def start() -> None:
     cleanup_task = asyncio.create_task(run_cleanup_loop(pool))
 
     try:
-        await ws_loop(
-            store,
-            platform_store,
-            router,
-            message_service,
-            provider_mgr,
-            memory_store=memory_store,
-        )
+        await asyncio.Event().wait()
     finally:
         cleanup_task.cancel()
+        await connection_manager.close()
         await plugin_manager.close()
         await runner.cleanup()
         await provider_mgr.close()

@@ -54,7 +54,7 @@ def get_pool() -> asyncpg.Pool:
 
 # ── Schema DDL ──────────────────────────────────────────────
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _CREATE_SCHEMA_META_TABLE = """\
 CREATE TABLE schema_meta (
@@ -406,6 +406,20 @@ CREATE TABLE IF NOT EXISTS plugins (
 );
 """
 
+_CREATE_ONEBOT_CONNECTIONS_TABLE = """\
+CREATE TABLE IF NOT EXISTS onebot_connections (
+    id                  SERIAL          PRIMARY KEY,
+    name                TEXT            NOT NULL UNIQUE,
+    ws_url              TEXT            NOT NULL,
+    token               TEXT            NOT NULL DEFAULT '',
+    enabled             BOOLEAN         NOT NULL DEFAULT TRUE,
+    auto_reconnect      BOOLEAN         NOT NULL DEFAULT TRUE,
+    reconnect_interval  INTEGER         NOT NULL DEFAULT 5,
+    created_at          TIMESTAMPTZ     NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ     NOT NULL DEFAULT now()
+);
+"""
+
 _CREATE_CUSTOM_PROMPTS_TABLE = """\
 CREATE TABLE custom_prompts (
     key             TEXT            PRIMARY KEY,
@@ -634,6 +648,7 @@ async def _init_schema(pool: asyncpg.Pool) -> None:
                 _CREATE_STATS_TABLES,
                 _CREATE_TOOL_USAGE_TABLE,
                 _CREATE_PLUGINS_TABLE,
+                _CREATE_ONEBOT_CONNECTIONS_TABLE,
             ):
                 await conn.execute(ddl)
             for ddl in _CREATE_INDEXES:

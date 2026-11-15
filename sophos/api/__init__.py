@@ -8,6 +8,7 @@ from sophos.adapter_router import AdapterRouter
 from sophos.api.frontend import setup_frontend_routes
 from sophos.api.middleware import auth_middleware, error_middleware
 from sophos.api.routes import setup_routes
+from sophos.connections import OneBotConnectionManager
 from sophos.llm.provider_manager import ProviderManager
 from sophos.memory.store import MemoryStore
 from sophos.plugins import PluginManager
@@ -22,6 +23,7 @@ async def create_app(
     tool_registry: ToolRegistry | None = None,
     adapter_router: AdapterRouter | None = None,
     plugin_manager: PluginManager | None = None,
+    connection_manager: OneBotConnectionManager | None = None,
 ) -> web.Application:
     """创建并配置 aiohttp 应用。"""
     app = web.Application(
@@ -37,6 +39,7 @@ async def create_app(
     app["tool_registry"] = tool_registry
     app["adapter_router"] = adapter_router
     app["plugin_manager"] = plugin_manager
+    app["connection_manager"] = connection_manager
 
     # CORS — 开发阶段 Vite(5173) → API(8080) 跨域
     cors = aiohttp_cors.setup(

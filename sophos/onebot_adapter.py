@@ -63,6 +63,8 @@ class OneBot11Adapter:
         platform_store: PlatformStore,
         self_external_id: str,
         display_name: str = "",
+        binding_name: str = "default",
+        external_id_namespace: str | None = None,
     ) -> OneBot11Adapter:
         self_identity = await platform_store.resolve_identity(
             platform="qq",
@@ -76,8 +78,8 @@ class OneBot11Adapter:
             identity_namespace="global",
             external_account_id=self_external_id,
             adapter_kind="onebot11",
-            binding_name="default",
-            external_id_namespace="onebot11:default",
+            binding_name=binding_name,
+            external_id_namespace=external_id_namespace or f"onebot11:{binding_name}",
             display_name=display_name,
         )
         return cls(

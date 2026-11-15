@@ -30,6 +30,7 @@ import {
   Upload,
 } from 'lucide-vue-next'
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '@/api'
 
 interface PluginInfo {
@@ -55,6 +56,7 @@ interface ConfigField {
 
 const message = useMessage()
 const dialog = useDialog()
+const route = useRoute()
 
 const plugins = ref<PluginInfo[]>([])
 const pluginsDir = ref('')
@@ -297,7 +299,10 @@ async function saveConfig() {
   }
 }
 
-onMounted(loadPlugins)
+onMounted(async () => {
+  await loadPlugins()
+  if (route.query.upload) openUpload()
+})
 </script>
 
 <template>

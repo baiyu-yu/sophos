@@ -24,6 +24,7 @@ import {
   Shield,
   Wrench,
   Puzzle,
+  Plug,
   FileText,
   Workflow,
   LogOut,
@@ -71,6 +72,7 @@ const menuOptions = [
   { label: 'Prompt', key: 'prompts', icon: renderIcon(FileText) },
   { label: '工具管理', key: 'tools', icon: renderIcon(Wrench) },
   { label: '插件', key: 'plugins', icon: renderIcon(Puzzle) },
+  { label: '协议端', key: 'connections', icon: renderIcon(Plug) },
   { label: '权限管理', key: 'permissions', icon: renderIcon(Shield) },
 ]
 

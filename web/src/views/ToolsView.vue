@@ -14,10 +14,13 @@ import {
 import {
   ChevronDown,
   ChevronRight,
+  Puzzle,
   RotateCcw,
   Save,
+  Upload,
 } from 'lucide-vue-next'
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '@/api'
 
 type ApiType = 'openai' | 'gemini'
@@ -39,6 +42,8 @@ interface ToolInfo {
   category: string
   conversation_kinds: string[] | null
   group: string
+  origin: string
+  plugin: string | null
   is_builtin: boolean
   is_custom: boolean
   enabled: boolean
@@ -65,6 +70,7 @@ interface ImageConfig {
 }
 
 const message = useMessage()
+const router = useRouter()
 
 const groups = ref<ToolGroup[]>([])
 const loading = ref(false)
@@ -240,6 +246,22 @@ onMounted(loadTools)
       <div class="page-actions glass-panel">
         <NSpace align="center" :size="12">
           <NText depth="3">共 {{ toolCount }} 个工具</NText>
+          <NButton size="small" @click="router.push({ name: 'plugins' })">
+            <template #icon>
+              <component :is="Puzzle" :size="16" />
+            </template>
+            插件
+          </NButton>
+          <NButton
+            size="small"
+            type="primary"
+            @click="router.push({ name: 'plugins', query: { upload: '1' } })"
+          >
+            <template #icon>
+              <component :is="Upload" :size="16" />
+            </template>
+            上传插件
+          </NButton>
         </NSpace>
       </div>
     </div>
@@ -302,6 +324,14 @@ onMounted(loadTools)
                     type="warning"
                   >
                     自定义
+                  </NTag>
+                  <NTag
+                    v-if="tool.origin.startsWith('plugin:')"
+                    size="tiny"
+                    :bordered="false"
+                    type="success"
+                  >
+                    插件 · {{ tool.plugin }}
                   </NTag>
                   <NTag
                     v-if="!tool.can_disable"

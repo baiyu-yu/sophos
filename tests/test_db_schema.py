@@ -8,6 +8,7 @@ from sophos.db import (
     _CREATE_INDEXES,
     _CREATE_LLM_PROVIDERS_TABLE,
     _CREATE_MESSAGES_TABLE,
+    _CREATE_ONEBOT_CONNECTIONS_TABLE,
     _CREATE_PLUGINS_TABLE,
     _CREATE_USER_IDENTITIES_TABLE,
     SCHEMA_VERSION,
@@ -49,7 +50,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         )
 
     def test_schema_has_platform_neutral_identity_and_conversation_keys(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 6)
+        self.assertEqual(SCHEMA_VERSION, 7)
         self.assertIn("platform, identity_namespace, external_user_id", _CREATE_USER_IDENTITIES_TABLE)
         self.assertIn("parent_conversation_id", _CREATE_CONVERSATIONS_TABLE)
         self.assertIn("'direct', 'group', 'channel', 'thread'", _CREATE_CONVERSATIONS_TABLE)
@@ -58,6 +59,8 @@ class DatabaseSchemaTests(unittest.TestCase):
         self.assertNotIn("scope           TEXT", _CREATE_CUSTOM_TOOLS_TABLE)
         self.assertIn("enabled         BOOLEAN         NOT NULL DEFAULT TRUE", _CREATE_PLUGINS_TABLE)
         self.assertIn("config          JSONB           NOT NULL DEFAULT '{}'::jsonb", _CREATE_PLUGINS_TABLE)
+        self.assertIn("auto_reconnect      BOOLEAN         NOT NULL DEFAULT TRUE", _CREATE_ONEBOT_CONNECTIONS_TABLE)
+        self.assertIn("reconnect_interval  INTEGER         NOT NULL DEFAULT 5", _CREATE_ONEBOT_CONNECTIONS_TABLE)
 
     def test_message_query_and_cleanup_indexes_are_declared(self) -> None:
         indexes = "\n".join(_CREATE_INDEXES)

@@ -58,6 +58,23 @@ curl http://127.0.0.1:8080/api/plugins
 [插件开发文档](docs/plugins.md)。插件状态（启用开关、配置）保存在数据库 `plugins` 表，
 从 schema v5 升级时需要执行一次 `python -m sophos.migrate_plugins`。
 
+插件注册的工具会出现在「工具管理」里，并带有「插件 · 插件名」标识，可以在同一页面
+启停、改描述；从「插件」页面或工具管理页右上角的「上传插件」都能直接上传。
+
+## 协议端连接
+
+OneBot 11 连接不再写死在环境变量里，由 WebUI 的「协议端」页面管理（保存在数据库
+`onebot_connections` 表）：
+
+- 新增、编辑、删除连接，配置 WebSocket 地址与 token；
+- 开关「自动重连」、调整重连间隔（1~600 秒）；
+- 随时「停止」「启动」或「重连」，页面每 5 秒刷新一次连接状态与机器人信息。
+
+首次启动会从 `ONEBOT_WS_URL`（Docker 环境为 `CONTAINER_ONEBOT_WS_URL`）生成一条
+「默认连接」作为种子；之后以页面中的配置为准，已经存在的连接不会被 env 覆盖。
+
+从 schema v6 升级时需要执行一次 `python -m sophos.migrate_connections`。
+
 ## 容器集成验证
 
 完整镜像同时包含 Python 后端和构建后的 Vue WebUI。生产运行时由 Aiohttp 在 `8080` 端口提供 API 和前端静态资源，不运行 Vite 进程。

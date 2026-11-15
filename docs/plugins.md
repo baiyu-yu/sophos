@@ -358,6 +358,9 @@ async def group_digest(params, context):
 一些协议端能力与内置工具重叠（如发消息），优先使用 `api.send_message` /
 `api.call_tool`，这样可以复用 Sophos 的入库、权限与会话解析逻辑。
 
+连接本身在 WebUI 的「协议端」页面管理（数据库表 `onebot_connections`），可以新增、
+修改、停止、重连或删除连接；`ONEBOT_WS_URL` 只在首次启动时作为默认连接的种子。
+
 ## 管理 API 与 WebUI
 
 | 方法 | 路径 | 说明 |

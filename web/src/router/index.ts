@@ -48,6 +48,11 @@ const router = createRouter({
           component: () => import('@/views/PluginsView.vue'),
         },
         {
+          path: 'connections',
+          name: 'connections',
+          component: () => import('@/views/ConnectionsView.vue'),
+        },
+        {
           path: 'permissions',
           name: 'permissions',
           component: () => import('@/views/PermissionsView.vue'),
