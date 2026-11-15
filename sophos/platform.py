@@ -108,6 +108,28 @@ class MessagingAdapter(Protocol):
 
 
 @runtime_checkable
+class RawProtocolAdapter(Protocol):
+    """Adapter that can forward raw calls to the underlying protocol endpoint.
+
+    OneBot v11 is the first implementation: ``call_protocol_api("get_group_info", ...)``
+    is equivalent to sending ``{"action": "get_group_info", "params": ...}`` over the
+    connected WebSocket. Plugins use this to reach protocol features Sophos does not
+    wrap yet.
+    """
+
+    @property
+    def protocol_name(self) -> str: ...
+
+    async def call_protocol_api(
+        self,
+        action: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any: ...
+
+
+@runtime_checkable
 class PlatformAdapter(MessagingAdapter, Protocol):
     """Full inbound/outbound adapter boundary consumed by the core pipeline."""
 

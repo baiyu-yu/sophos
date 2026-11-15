@@ -35,8 +35,10 @@ WORKDIR /app
 COPY --from=python-builder /app/.venv /app/.venv
 COPY --from=python-builder /app/sophos /app/sophos
 COPY --from=web-builder /build/web/dist /app/web/dist
+COPY plugins/ /app/plugins/
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+ENV PLUGINS_DIR=/app/plugins
 
 CMD ["python", "-m", "sophos.main"]

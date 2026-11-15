@@ -57,12 +57,8 @@ from sophos.memory.profile import build_profile_block
 from sophos.message_store import MessageStore
 from sophos.messaging import MessageService
 from sophos.platform import ConversationKind, MessageEvent, PlatformAdapter, SendMessageRequest
-from sophos.tools.image_gen import IMAGE_GEN_TOOLS
-from sophos.tools.memory import MEMORY_TOOLS
-from sophos.tools.messaging import ALL_MESSAGING_TOOLS
-from sophos.tools.registry import ToolRegistry
-from sophos.tools.vision import VISION_TOOLS
-from sophos.tools.web import WEB_TOOLS
+from sophos.toolkit import ToolRegistry
+from sophos.toolkit import runtime as tool_runtime
 from sophos.vision import process_message_images
 
 logger = logging.getLogger("sophos")
@@ -263,9 +259,6 @@ async def _process_event_images(
 
 # ── LLM 触发（临时，后续由触发器 stage 替代）────────────────
 
-_tool_registry: ToolRegistry | None = None
-
-
 # ── 最近动态 ──────────────────────────────────────────────
 
 
@@ -306,37 +299,17 @@ def _format_recent_global_block(
 
 def _get_registry() -> ToolRegistry:
     """获取或创建 ToolRegistry 单例。"""
-    global _tool_registry
-    if _tool_registry is None:
-        _tool_registry = ToolRegistry()
-        for tool in ALL_MESSAGING_TOOLS + MEMORY_TOOLS + VISION_TOOLS + WEB_TOOLS + IMAGE_GEN_TOOLS:
-            _tool_registry.register(tool)
-    return _tool_registry
+    return tool_runtime.get_registry()
 
 
-_tool_disabled_loaded: bool = False
-
-
-async def _load_tool_disabled_state(registry: ToolRegistry) -> None:
+async def _load_tool_disabled_state(registry: ToolRegistry | None = None) -> None:
     """从 DB 加载工具禁用状态（仅首次调用时加载）。"""
-    global _tool_disabled_loaded
-    if _tool_disabled_loaded:
-        return
-    pool = get_pool()
-    rows = await pool.fetch("SELECT name, enabled FROM custom_tools")
-    for row in rows:
-        if not row["enabled"]:
-            registry.set_disabled(row["name"], True)
-    _tool_disabled_loaded = True
+    await tool_runtime.load_disabled_state(registry)
 
 
 def _invalidate_tool_disabled_cache() -> None:
     """清除工具禁用状态缓存，下次触发时重新加载。"""
-    global _tool_disabled_loaded
-    _tool_disabled_loaded = False
-    # 同时清除 registry 中的禁用状态，以便重新从 DB 加载
-    if _tool_registry is not None:
-        _tool_registry._disabled_tools.clear()
+    tool_runtime.invalidate_disabled_state()
 
 
 async def _load_description_overrides() -> dict[str, str]:
@@ -357,6 +330,19 @@ _RAW_TOOL_CALL_RE = re.compile(
 _RE_REPLY_PREFIX = re.compile(r"^\[回复[^\]]*\]\s*")
 
 
+def _match_raw_tool_name(text: str) -> str | None:
+    """判断文本是否以「工具名 + ( 或 {」开头；同时覆盖插件工具。"""
+    match = _RAW_TOOL_CALL_RE.match(text)
+    if match:
+        return match.group(1)
+    registry = tool_runtime.peek_registry()
+    if registry is not None:
+        for name in registry.list_tools():
+            if text.startswith(name) and len(text) > len(name) and text[len(name)] in "({":
+                return name
+    return None
+
+
 def _sanitize_fallback_reply(text: str) -> str | None:
     """如果 fallback 文本像 raw tool call，尝试提取实际回复；无法提取则返回 None。
 
@@ -365,9 +351,8 @@ def _sanitize_fallback_reply(text: str) -> str | None:
     stripped = _RE_REPLY_PREFIX.sub("", text).strip()
 
     # 以工具名开头 → 大概率是 raw tool call
-    m = _RAW_TOOL_CALL_RE.match(stripped)
-    if m:
-        tool_name = m.group(1)
+    tool_name = _match_raw_tool_name(stripped)
+    if tool_name:
         if tool_name == "send_message":
             json_m = re.search(r"\{.*\}", stripped, re.DOTALL)
             if json_m:
@@ -378,7 +363,7 @@ def _sanitize_fallback_reply(text: str) -> str | None:
                         return data["text"]
                 except (json.JSONDecodeError, TypeError):
                     pass
-        logger.warning("Fallback content looks like raw tool call (%s), skipping", m.group(1))
+        logger.warning("Fallback content looks like raw tool call (%s), skipping", tool_name)
         return None
 
     # 纯 JSON 对象 → 可能是 send_message 参数

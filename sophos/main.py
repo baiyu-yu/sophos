@@ -24,9 +24,11 @@ from sophos.message_store import MessageStore
 from sophos.messaging import MessageService
 from sophos.onebot_adapter import OneBot11Adapter
 from sophos.onebot_api import OneBotAPI
-from sophos.pipeline import INGEST_STAGES, RESPONSE_STAGES, Pipeline, PipelineContext, _get_registry
+from sophos.pipeline import INGEST_STAGES, RESPONSE_STAGES, Pipeline, PipelineContext
 from sophos.platform import PlatformAdapter
 from sophos.platform_store import PlatformStore
+from sophos.plugins import DbPluginStateStore, PluginManager
+from sophos.toolkit import runtime as tool_runtime
 
 logger = logging.getLogger("sophos")
 
@@ -160,13 +162,29 @@ async def start() -> None:
     # 初始化记忆存储
     memory_store = MemoryStore(pool, provider_mgr.get_embedding_provider())
 
+    # 初始化工具注册表与插件子系统（插件可注册工具、调用内置能力、直连协议端）
+    registry = tool_runtime.get_registry()
+    plugin_manager = PluginManager(
+        registry=registry,
+        plugin_dir=settings.plugins_dir,
+        state_store=DbPluginStateStore(pool),
+        adapter_router=router,
+        message_service=message_service,
+        store=store,
+        pool=pool,
+        provider_mgr=provider_mgr,
+        memory_store=memory_store,
+    )
+    await plugin_manager.init()
+
     # 启动 HTTP API server（非阻塞）
     app = await create_app(
         pool=pool,
         provider_mgr=provider_mgr,
         memory_store=memory_store,
-        tool_registry=_get_registry(),
+        tool_registry=registry,
         adapter_router=router,
+        plugin_manager=plugin_manager,
     )
     runner = web.AppRunner(app)
     await runner.setup()
@@ -188,6 +206,7 @@ async def start() -> None:
         )
     finally:
         cleanup_task.cancel()
+        await plugin_manager.close()
         await runner.cleanup()
         await provider_mgr.close()
         await close_db()

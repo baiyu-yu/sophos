@@ -5,6 +5,7 @@ import json
 import asyncpg
 from aiohttp import web
 
+from sophos.toolkit.registry import UNSAFE_DISABLE_TOOLS, ToolRegistry
 from sophos.tools.image_gen import (
     _DEFAULT_DESCRIPTION,
     _DEFAULT_REQUEST_TIMEOUT,
@@ -13,7 +14,6 @@ from sophos.tools.image_gen import (
     parse_request_timeout,
     persist_image_config,
 )
-from sophos.tools.registry import UNSAFE_DISABLE_TOOLS, ToolRegistry
 
 routes = web.RouteTableDef()
 
@@ -25,6 +25,7 @@ _GROUP_LABELS: dict[str, str] = {
     "vision": "视觉",
     "web": "联网",
     "image_generation": "图像生成",
+    "plugin": "插件",
     "other": "其他",
 }
 
@@ -35,6 +36,7 @@ _GROUP_ORDER: list[str] = [
     "vision",
     "web",
     "image_generation",
+    "plugin",
     "other",
 ]
 
@@ -85,7 +87,9 @@ async def list_tools(request: web.Request) -> web.Response:
                 "send_as": custom["send_as"],
             }
         else:
-            info["enabled"] = info["is_builtin"]
+            # 没有 custom_tools 记录时以注册表的禁用状态为准：
+            # 内置工具默认启用，插件工具也默认启用（可被管理端单独停用）。
+            info["enabled"] = not registry.is_disabled(info["name"])
 
     groups: dict[str, list[dict]] = {}
     for info in tools_info:

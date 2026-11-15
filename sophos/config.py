@@ -131,6 +131,10 @@ class Settings(BaseSettings):
     # WebUI 登录密码（空 = 无需登录）
     webui_password: str = ""
 
+    # ── 插件 ──────────────────────────────────────────────
+    # 插件目录：支持 <dir>/<name>/plugin.py 与 <dir>/<name>.py
+    plugins_dir: str = "plugins"
+
 
 # 全局单例，import 后直接使用
 settings = Settings()

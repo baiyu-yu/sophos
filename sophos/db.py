@@ -54,7 +54,7 @@ def get_pool() -> asyncpg.Pool:
 
 # ── Schema DDL ──────────────────────────────────────────────
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _CREATE_SCHEMA_META_TABLE = """\
 CREATE TABLE schema_meta (
@@ -397,6 +397,15 @@ CREATE TABLE IF NOT EXISTS tool_description_overrides (
 );
 """
 
+_CREATE_PLUGINS_TABLE = """\
+CREATE TABLE IF NOT EXISTS plugins (
+    name            TEXT            PRIMARY KEY,
+    enabled         BOOLEAN         NOT NULL DEFAULT TRUE,
+    config          JSONB           NOT NULL DEFAULT '{}'::jsonb,
+    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT now()
+);
+"""
+
 _CREATE_CUSTOM_PROMPTS_TABLE = """\
 CREATE TABLE custom_prompts (
     key             TEXT            PRIMARY KEY,
@@ -624,6 +633,7 @@ async def _init_schema(pool: asyncpg.Pool) -> None:
                 _CREATE_PROMPT_VERSIONS_TABLE,
                 _CREATE_STATS_TABLES,
                 _CREATE_TOOL_USAGE_TABLE,
+                _CREATE_PLUGINS_TABLE,
             ):
                 await conn.execute(ddl)
             for ddl in _CREATE_INDEXES:

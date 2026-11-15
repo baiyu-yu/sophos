@@ -151,11 +151,12 @@ def _config_from_row(row: Any) -> dict[str, Any]:
 
 
 def _after_image_config_change(enabled: bool) -> None:
-    from sophos import pipeline
+    from sophos.toolkit import runtime as tool_runtime
 
-    pipeline._invalidate_tool_disabled_cache()
-    if pipeline._tool_registry is not None:
-        pipeline._tool_registry.set_disabled(_IMAGE_TOOL_NAME, not enabled)
+    tool_runtime.invalidate_disabled_state()
+    registry = tool_runtime.peek_registry()
+    if registry is not None:
+        registry.set_disabled(_IMAGE_TOOL_NAME, not enabled)
 
 
 async def load_image_config(pool: Any) -> dict[str, Any]:

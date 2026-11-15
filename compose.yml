@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
 
   sophos:
-    image: ghcr.io/mintcider/sophos:${SOPHOS_VERSION:-latest}
+    image: baiyu-yu/sophos:${SOPHOS_VERSION:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -34,6 +34,7 @@ services:
       - "${SOPHOS_PORT:-8080}:8080"
     volumes:
       - ./logs:/app/logs
+      - ./plugins:/app/plugins
     healthcheck:
       test:
         - CMD

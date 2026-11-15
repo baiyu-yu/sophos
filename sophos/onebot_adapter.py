@@ -51,6 +51,10 @@ class OneBot11Adapter:
         self.account_id = account_id
         self.self_identity = self_identity
 
+    @property
+    def protocol_name(self) -> str:
+        return "onebot11"
+
     @classmethod
     async def create(
         cls,
@@ -83,6 +87,16 @@ class OneBot11Adapter:
             account_id=account_id,
             self_identity=self_identity,
         )
+
+    async def call_protocol_api(
+        self,
+        action: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        """Forward a raw OneBot 11 action to the connected implementation."""
+        return await self.api.call(action, params, timeout=timeout)
 
     async def normalize_event(self, event: dict[str, Any]) -> MessageEvent | None:
         if event.get("post_type") not in {"message", "message_sent"}:

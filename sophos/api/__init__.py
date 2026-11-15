@@ -10,7 +10,8 @@ from sophos.api.middleware import auth_middleware, error_middleware
 from sophos.api.routes import setup_routes
 from sophos.llm.provider_manager import ProviderManager
 from sophos.memory.store import MemoryStore
-from sophos.tools.registry import ToolRegistry
+from sophos.plugins import PluginManager
+from sophos.toolkit.registry import ToolRegistry
 
 
 async def create_app(
@@ -20,6 +21,7 @@ async def create_app(
     memory_store: MemoryStore | None,
     tool_registry: ToolRegistry | None = None,
     adapter_router: AdapterRouter | None = None,
+    plugin_manager: PluginManager | None = None,
 ) -> web.Application:
     """创建并配置 aiohttp 应用。"""
     app = web.Application(middlewares=[error_middleware, auth_middleware])
@@ -30,6 +32,7 @@ async def create_app(
     app["memory_store"] = memory_store
     app["tool_registry"] = tool_registry
     app["adapter_router"] = adapter_router
+    app["plugin_manager"] = plugin_manager
 
     # CORS — 开发阶段 Vite(5173) → API(8080) 跨域
     cors = aiohttp_cors.setup(
