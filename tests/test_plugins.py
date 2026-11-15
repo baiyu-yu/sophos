@@ -376,6 +376,49 @@ class PluginInstallTests(unittest.IsolatedAsyncioTestCase):
             await manager.close()
 
 
+class UploadRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_upload_endpoint_installs_zip_plugin(self) -> None:
+        import tempfile
+
+        from aiohttp import FormData, web
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from sophos.api.routes.plugins import routes
+
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = ToolRegistry()
+            manager = PluginManager(
+                registry=registry,
+                plugin_dir=Path(tmp),
+                state_store=MemoryPluginStateStore(),
+            )
+            await manager.init()
+            try:
+                app = web.Application()
+                app["plugin_manager"] = manager
+                app.router.add_routes(routes)
+                async with TestClient(TestServer(app)) as client:
+                    form = FormData()
+                    form.add_field(
+                        "file",
+                        _zip_bytes({"demo/plugin.py": _DEMO_PLUGIN}),
+                        filename="demo.zip",
+                        content_type="application/zip",
+                    )
+                    response = await client.post("/api/plugins/upload", data=form)
+                    self.assertEqual(response.status, 201)
+                    payload = await response.json()
+                    self.assertEqual(payload["plugin"]["name"], "demo")
+                    self.assertEqual(payload["plugin"]["status"], "loaded")
+                    self.assertIsNotNone(registry.get("demo_ping"))
+
+                    deleted = await client.delete("/api/plugins/demo")
+                    self.assertEqual(deleted.status, 200)
+                    self.assertIsNone(registry.get("demo_ping"))
+            finally:
+                await manager.close()
+
+
 class RegistryOriginTests(unittest.IsolatedAsyncioTestCase):
     async def test_plugin_origin_cannot_remove_builtin_tool(self) -> None:
         from sophos.toolkit import FunctionTool
