@@ -24,7 +24,11 @@ async def create_app(
     plugin_manager: PluginManager | None = None,
 ) -> web.Application:
     """创建并配置 aiohttp 应用。"""
-    app = web.Application(middlewares=[error_middleware, auth_middleware])
+    app = web.Application(
+        middlewares=[error_middleware, auth_middleware],
+        # 插件上传接口按 16MB 限制请求体，与路由层校验保持一致
+        client_max_size=16 * 1024 * 1024,
+    )
 
     # 依赖注入到 app context，handler 通过 request.app["xxx"] 访问
     app["pool"] = pool

@@ -32,6 +32,8 @@ class PluginStateStore(Protocol):
 
     async def set_config(self, name: str, config: dict[str, Any]) -> None: ...
 
+    async def delete(self, name: str) -> None: ...
+
 
 def decode_jsonb(value: Any) -> dict[str, Any]:
     """asyncpg 未注册 JSONB codec，读出来是字符串；这里统一成 dict。"""
@@ -84,6 +86,9 @@ class DbPluginStateStore:
             json.dumps(config, ensure_ascii=False),
         )
 
+    async def delete(self, name: str) -> None:
+        await self._pool.execute("DELETE FROM plugins WHERE name = $1", name)
+
 
 class MemoryPluginStateStore:
     """内存状态存储，主要用于测试与无数据库的嵌入式运行。"""
@@ -104,6 +109,9 @@ class MemoryPluginStateStore:
     async def set_config(self, name: str, config: dict[str, Any]) -> None:
         state = self._states.setdefault(name, PluginState())
         state.config = dict(config)
+
+    async def delete(self, name: str) -> None:
+        self._states.pop(name, None)
 
     def seed(self, name: str, *, enabled: bool = True, config: dict[str, Any] | None = None) -> None:
         """测试辅助：预置某个插件的状态。"""

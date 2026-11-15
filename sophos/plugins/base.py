@@ -19,6 +19,10 @@ class PluginLoadError(PluginError):
     """插件导入或初始化失败。"""
 
 
+class PluginInstallError(PluginError):
+    """插件安装包无效或安装失败。"""
+
+
 @dataclass(frozen=True, slots=True)
 class PluginMetadata:
     """插件的自描述信息。

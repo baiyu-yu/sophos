@@ -23,6 +23,7 @@ import {
   Orbit,
   Shield,
   Wrench,
+  Puzzle,
   FileText,
   Workflow,
   LogOut,
@@ -69,6 +70,7 @@ const menuOptions = [
   { label: '工作流', key: 'workflow', icon: renderIcon(Workflow) },
   { label: 'Prompt', key: 'prompts', icon: renderIcon(FileText) },
   { label: '工具管理', key: 'tools', icon: renderIcon(Wrench) },
+  { label: '插件', key: 'plugins', icon: renderIcon(Puzzle) },
   { label: '权限管理', key: 'permissions', icon: renderIcon(Shield) },
 ]
 

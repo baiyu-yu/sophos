@@ -18,6 +18,7 @@ from sophos.plugins.api import (
 )
 from sophos.plugins.base import (
     PluginError,
+    PluginInstallError,
     PluginLoadError,
     PluginMetadata,
     PluginNotFoundError,
@@ -38,6 +39,7 @@ __all__ = [
     "PluginError",
     "PluginHTTPError",
     "PluginHTTPResponse",
+    "PluginInstallError",
     "PluginLoadError",
     "PluginManager",
     "PluginMetadata",

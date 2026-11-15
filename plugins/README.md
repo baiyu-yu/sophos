@@ -24,6 +24,10 @@ cp -r plugins/examples/demo plugins/demo
 curl -X POST http://127.0.0.1:8080/api/plugins/reload
 ```
 
+也可以直接在 WebUI 的「插件」页面点「上传插件」，选择 `.zip` 目录插件包或单个
+`.py` 文件；如需配置项，在插件卡片上点配置按钮即可。上传、启停、配置与删除都不需要
+重启服务。
+
 完整 API 参考、工具注册、协议端直连（OneBot 11）、HTTP 调用与安全说明见
 [`docs/plugins.md`](../docs/plugins.md)。
 

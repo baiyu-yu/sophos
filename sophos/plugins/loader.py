@@ -35,7 +35,16 @@ import aiohttp
 
 from sophos.config import settings
 from sophos.plugins.api import PluginAPI, PluginRuntime
-from sophos.plugins.base import PluginError, PluginLoadError, PluginMetadata, PluginNotFoundError
+from sophos.plugins.base import (
+    PluginError,
+    PluginInstallError,
+    PluginLoadError,
+    PluginMetadata,
+    PluginNotFoundError,
+)
+from sophos.plugins.install import install_file as _install_file
+from sophos.plugins.install import install_zip as _install_zip
+from sophos.plugins.install import remove_installed as _remove_installed
 from sophos.plugins.state import PluginState, PluginStateStore
 from sophos.toolkit.registry import ToolRegistry, plugin_origin
 
@@ -187,6 +196,69 @@ class PluginManager:
                 record.config = merged
                 return record
             return await self._restart(record, enabled=True, config=merged)
+
+    async def install_zip(
+        self,
+        filename: str,
+        data: bytes,
+        *,
+        overwrite: bool = False,
+    ) -> LoadedPlugin:
+        """从上传的 zip 安装目录插件并立即加载。"""
+        async with self._lock:
+            name = _install_zip(self._plugin_dir, filename, data, overwrite=overwrite)
+            return await self._reload_after_install(name)
+
+    async def install_file(
+        self,
+        filename: str,
+        data: bytes,
+        *,
+        overwrite: bool = False,
+    ) -> LoadedPlugin:
+        """从上传的单个 ``.py`` 安装插件并立即加载。"""
+        async with self._lock:
+            name = _install_file(self._plugin_dir, filename, data, overwrite=overwrite)
+            return await self._reload_after_install(name)
+
+    async def uninstall(self, name: str) -> None:
+        """停用并删除插件文件，同时清理持久化的开关与配置。"""
+        async with self._lock:
+            record = self._plugins.get(name)
+            item = record.discovered if record is not None else self._discover().get(name)
+            if item is None or item.path is None:
+                raise PluginNotFoundError(name)
+            if item.source == "entry_point":
+                raise PluginInstallError("entry point 安装的插件不能通过 WebUI 删除")
+            if record is not None:
+                await self._stop_plugin(record)
+            _remove_installed(self._plugin_dir, name, item.path, source=item.source)
+            self._plugins.pop(name, None)
+            self._states.pop(name, None)
+            if self._state_store is not None:
+                await self._state_store.delete(name)
+
+    async def _reload_after_install(self, name: str) -> LoadedPlugin:
+        await self._load_states()
+        item = self._discover().get(name)
+        if item is None:
+            raise PluginInstallError(f"安装后未能发现插件 {name}")
+        stale: list[LoadedPlugin] = []
+        old = self._plugins.get(name)
+        if old is not None:
+            stale.append(old)
+        for key, existing in list(self._plugins.items()):
+            if existing is not old and existing.discovered.path == item.path:
+                stale.append(existing)
+                self._plugins.pop(key, None)
+        for existing in stale:
+            for key, value in list(self._plugins.items()):
+                if value is existing:
+                    self._plugins.pop(key, None)
+            await self._stop_plugin(existing)
+        record = await self._load_plugin(item)
+        self._plugins[record.name] = record
+        return record
 
     async def close(self) -> None:
         """卸载全部插件并释放自己创建的 HTTP 会话。"""

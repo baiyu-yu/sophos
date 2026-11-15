@@ -26,6 +26,9 @@ plugins/            插件目录（PLUGINS_DIR）
 
 ## 快速开始
 
+最省事的方式是打开 WebUI 的「插件」页面，点「上传插件」选择 `.zip` 或 `.py`，
+上传后立即加载并在列表中显示。下面的命令行方式适合自动化或批量部署。
+
 1. 复制示例插件：
 
    ```bash
@@ -360,8 +363,10 @@ async def group_digest(params, context):
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/plugins` | 列出插件、状态、配置、工具、目录 |
+| POST | `/api/plugins/upload` | multipart 上传 `.zip` / `.py`；query `overwrite=true` 覆盖同名插件 |
 | PUT | `/api/plugins/{name}/enabled` | body `{"enabled": false}`，立即停用/启用 |
 | PUT | `/api/plugins/{name}/config` | body `{"config": {...}}`，覆盖配置并自动重载 |
+| DELETE | `/api/plugins/{name}` | 停用并删除插件文件，同时清理开关与配置 |
 | POST | `/api/plugins/reload` | 重新扫描目录并重载全部插件 |
 | POST | `/api/plugins/{name}/reload` | 只重载一个插件 |
 
@@ -373,6 +378,18 @@ curl -X PUT http://127.0.0.1:8080/api/plugins/demo/config \
   -H 'Content-Type: application/json' \
   -d '{"config": {"prefix": "[测试]"}}'
 ```
+
+`POST /api/plugins/upload` 的约束：
+
+- 只接受 `.zip` 目录插件包或单个 `.py` 文件，请求体上限 16MB；
+- zip 内必须包含 `plugin.py`（位于包根目录或唯一顶层目录下，唯一顶层目录会被剥掉并作为插件目录名）；
+- zip ≤ 5MB、解压后 ≤ 20MB、条目 ≤ 500、单文件 ≤ 1MB；
+- 拒绝绝对路径、`..` 路径穿越与软链接；
+- `overwrite=true` 时覆盖同名插件目录/文件。
+
+WebUI 的「插件」页面会按 `default_config` 的值类型渲染配置表单：布尔值用开关、
+数字用数字输入框、字符串用文本框、数组/对象用 JSON 文本域；也可以切到 JSON
+模式直接编辑整个配置。保存后启用中的插件会自动重载，停用中的插件只更新配置。
 
 启用了 WebUI 密码时，这些接口同样需要登录 cookie。
 

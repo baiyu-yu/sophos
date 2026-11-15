@@ -43,7 +43,10 @@ plugins/
 ```
 
 插件可以注册任意工具、调用内置工具、通过 `MessageService` 发消息、直连 OneBot 11
-协议端接口，或访问外部 HTTP API。示例：
+协议端接口，或访问外部 HTTP API。除了把文件放进 `plugins/`，也可以直接在 WebUI 的
+「插件」页面**上传** `.zip` 或 `.py` 插件，并在同一页面启停、修改配置、重载或删除。
+
+示例：
 
 ```bash
 cp -r plugins/examples/demo plugins/demo
