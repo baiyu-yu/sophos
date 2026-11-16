@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   NConfigProvider,
+  NDialogProvider,
   NMessageProvider,
   darkTheme,
   type GlobalThemeOverrides,
@@ -71,7 +72,9 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
 <template>
   <NConfigProvider :theme="theme" :theme-overrides="themeOverrides">
     <NMessageProvider>
-      <RouterView />
+      <NDialogProvider>
+        <RouterView />
+      </NDialogProvider>
     </NMessageProvider>
   </NConfigProvider>
 </template>
