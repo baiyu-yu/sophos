@@ -172,7 +172,20 @@ async def chat(provider: Any, messages: list, *, slot: str, **kwargs: Any) -> di
     async with model_call(
         slot=slot, provider=getattr(provider, "usage_alias", ""), model=getattr(provider, "_model", "unknown"),
     ) as call:
-        response = await provider.chat(messages, **kwargs)
+        try:
+            response = await provider.chat(messages, **kwargs)
+        except Exception as exc:
+            logger.error(
+                "LLM 调用失败（slot=%s, provider=%s, model=%s, messages=%d）：%s: %s",
+                slot,
+                getattr(provider, "usage_alias", ""),
+                getattr(provider, "_model", "unknown"),
+                len(messages),
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise
         call.usage = response.get("usage")
         call.provider_kind = response.get("provider", "")
         return response

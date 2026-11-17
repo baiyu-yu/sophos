@@ -36,6 +36,12 @@ _STANDARD_MESSAGE_KEYS = {
 }
 
 
+def _preview(text: str, limit: int = 300) -> str:
+    """把模型输出压成一行短预览，避免日志被换行撑爆。"""
+    collapsed = " ".join(text.split())
+    return collapsed if len(collapsed) <= limit else collapsed[:limit] + "…"
+
+
 def sanitize_openai_messages(
     messages: list[Message],
     *,
@@ -370,6 +376,15 @@ class OpenAICompatProvider(LLMProvider):
             len(tool_calls_map),
             finish_reason,
         )
+        if content:
+            logger.debug("Stream content preview: %s", _preview(content))
+        elif tool_calls_map:
+            logger.debug(
+                "Stream tool calls: %s",
+                [str((call.get("function") or {}).get("name")) for call in tool_calls_map.values()],
+            )
+        else:
+            logger.warning("LLM 流式响应为空（chunks=%d, finish=%s）", chunk_count, finish_reason)
         result: ChatResponse = {
             "message": message,
             "usage": usage_info,
@@ -437,6 +452,10 @@ class OpenAICompatProvider(LLMProvider):
             "native_metadata": native_metadata,
         }
         logger.log(TRACE, "LLM response:\n%s", json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        if message.get("content"):
+            logger.debug("LLM content preview: %s", _preview(str(message["content"])))
+        if not message.get("content") and not message.get("tool_calls"):
+            logger.warning("LLM 响应既无文本也无工具调用（finish=%s）", finish)
         return result
 
     async def close(self) -> None:

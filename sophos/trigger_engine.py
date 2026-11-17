@@ -193,6 +193,12 @@ class TriggerEngine:
                     raise
                 finally:
                     status = "failed" if trace.failed else "replied" if trace.sent_count else "no_reply"
+                    if status == "no_reply":
+                        logger.info(
+                            "本轮未发送回复 conversation=%s（模型可能调用了 finish_without_reply、"
+                            "只调用了查询类工具，或工作流提前结束）",
+                            ctx.conversation_id,
+                        )
                     await observability.update_trigger(
                         event_id, status=status, sent_count=trace.sent_count, run_id=trace.run_id,
                     )

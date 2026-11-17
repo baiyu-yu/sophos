@@ -171,6 +171,7 @@ class LLMNodeExecutor:
                     call["id"] = f"{node.node_id}_{run.step_count}_{round_number}_{index}"
             self.context.append_node_message(assistant_message, node.node_id)
             _record_provider_response(run.transcript, node, response)
+            _log_model_response(node, round_number, response)
             if self.context.on_step is not None:
                 usage = response.get("usage") or {}
                 self.context.on_step(
@@ -189,6 +190,11 @@ class LLMNodeExecutor:
                 )
                 if implicit is not None:
                     return implicit
+                logger.warning(
+                    "LLM 节点 %s 既没有返回文本也没有调用工具（finish=%s），本轮不会有回复",
+                    node.node_id,
+                    response.get("finish_reason"),
+                )
                 raise LLMNodeExecutionError(
                     f"node {node.node_id} returned without a tool or transition call"
                 )
@@ -233,9 +239,18 @@ class LLMNodeExecutor:
                         await observability.record_error(f"tool:{tool_name}", exc)
                         logger.exception("Tool %s execution failed in node %s", tool_name, node.node_id)
                         result = {"error": f"工具 {tool_name} 执行失败: {exc}"}
+                    if isinstance(result, dict) and result.get("error"):
+                        logger.warning(
+                            "工具 %s 返回错误（node=%s）：%s",
+                            tool_name,
+                            node.node_id,
+                            _preview(str(result.get("error")), 200),
+                        )
                     if tool_name in self.context.completion_tools and _is_success(result):
                         completion_succeeded = True
                         completion_tool = tool_name
+                        if tool_name == "finish_without_reply":
+                            logger.info("模型选择静默结束，本轮不发送回复（node=%s）", node.node_id)
 
                 result_text = json.dumps(result, ensure_ascii=False, default=str)
                 self.context.append_node_message(
@@ -365,6 +380,31 @@ def _parse_arguments(raw: Any) -> tuple[dict[str, Any], bool]:
 
 def _is_success(result: Any) -> bool:
     return not (isinstance(result, dict) and result.get("error"))
+
+
+def _preview(text: str, limit: int = 300) -> str:
+    collapsed = " ".join(text.split())
+    return collapsed if len(collapsed) <= limit else collapsed[:limit] + "…"
+
+
+def _log_model_response(node: NodeSpec, round_number: int, response: dict[str, Any]) -> None:
+    """把模型这一轮的输出写进日志，便于排查「为什么不回复」。"""
+    message = response.get("message") or {}
+    content = str(message.get("content") or "")
+    calls = message.get("tool_calls") or []
+    tool_names = [str((call.get("function") or {}).get("name") or "?") for call in calls]
+    usage = response.get("usage") or {}
+    logger.debug(
+        "LLM 响应 node=%s round=%d finish=%s content_len=%d tools=%s output_tokens=%s",
+        node.node_id,
+        round_number,
+        response.get("finish_reason"),
+        len(content),
+        tool_names or "-",
+        usage.get("completion_tokens"),
+    )
+    if content:
+        logger.debug("LLM 文本预览 node=%s: %s", node.node_id, _preview(content))
 
 
 def _record_provider_response(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from sophos import observability
 from sophos.adapter_router import AdapterRouter
 from sophos.message_store import MessageStore
@@ -13,6 +15,8 @@ from sophos.platform import (
     SentMessage,
 )
 from sophos.platform_store import PlatformStore
+
+logger = logging.getLogger(__name__)
 
 
 class MessageService:
@@ -75,6 +79,13 @@ class MessageService:
             occurred_at=delivered.occurred_at,
             metadata=request.metadata,
             raw_payload=delivered.raw_payload,
+        )
+        logger.info(
+            "已发送消息 conversation=%s internal_id=%s external_id=%s reply_to=%s",
+            conversation.conversation_id,
+            internal_id,
+            delivered.external_message_id,
+            reply_to_message_id,
         )
         return SentMessage(
             message_id=internal_id,

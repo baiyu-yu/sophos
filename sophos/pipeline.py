@@ -659,6 +659,12 @@ async def _handle_llm_trigger(ctx: PipelineContext) -> None:
     )
     run = WorkflowRun(workflow=workflow, transcript=transcript, conversation_id=ctx.conversation_id)
     observability.workflow_started(run.run_id)
+    logger.debug(
+        "Agent workflow 开始 run=%s workflow=%s conversation=%s",
+        run.run_id,
+        workflow.workflow_id,
+        ctx.conversation_id,
+    )
     tracker = get_run_tracker()
     llm_context.on_step = lambda kind, node_id, data: tracker.event(run.run_id, kind, node_id, data)
     engine = WorkflowEngine({"llm": LLMNodeExecutor(llm_context)}, observer=tracker)
@@ -674,6 +680,12 @@ async def _handle_llm_trigger(ctx: PipelineContext) -> None:
         return
     ctx.state["agent_workflow"] = run.to_state_dict()
     ctx.state["agent_transcript"] = transcript.to_list()
+    logger.debug(
+        "Agent workflow 结束 run=%s conversation=%s nodes=%d",
+        run.run_id,
+        ctx.conversation_id,
+        len(workflow.nodes),
+    )
 
 
 # ── Stage 实现 ───────────────────────────────────────────────
