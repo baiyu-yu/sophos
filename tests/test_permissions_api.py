@@ -1,8 +1,11 @@
 import math
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
+from sophos.api.routes import permissions as permissions_routes
 from sophos.api.routes.permissions import (
     _parse_float,
     _parse_int,
@@ -44,6 +47,51 @@ class PermissionApiValidationTests(unittest.TestCase):
         self.assertIn(("PUT", "/api/permissions/scopes/{scope_type}/{scope_id}/tools"), registered)
         self.assertIn(("POST", "/api/permissions/grants"), registered)
         self.assertIn(("POST", "/api/permissions/policies"), registered)
+        self.assertIn(("GET", "/api/permissions/masters"), registered)
+        self.assertIn(("POST", "/api/permissions/masters"), registered)
+        self.assertIn(("DELETE", "/api/permissions/masters/{user_id}"), registered)
+
+
+class MasterRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        app = web.Application()
+        app["pool"] = object()
+        app.router.add_routes(routes)
+        self.client = TestClient(TestServer(app))
+        await self.client.start_server()
+
+    async def asyncTearDown(self) -> None:
+        await self.client.close()
+
+    async def test_grant_master(self) -> None:
+        with (
+            patch.object(permissions_routes.permission, "grant_master", AsyncMock(return_value=True)),
+            patch.object(permissions_routes, "_require_user", AsyncMock()),
+        ):
+            response = await self.client.post("/api/permissions/masters", json={"user_id": 5})
+            self.assertEqual(response.status, 200)
+            self.assertIn("设为 Master", (await response.json())["message"])
+
+    async def test_cannot_revoke_last_master(self) -> None:
+        with patch.object(
+            permissions_routes.permission,
+            "list_masters",
+            AsyncMock(return_value=[{"user_id": 1, "display_name": "master"}]),
+        ):
+            response = await self.client.delete("/api/permissions/masters/1")
+            self.assertEqual(response.status, 400)
+
+    async def test_revoke_missing_master_returns_404(self) -> None:
+        with (
+            patch.object(
+                permissions_routes.permission,
+                "list_masters",
+                AsyncMock(return_value=[{"user_id": 1, "display_name": "a"}, {"user_id": 2, "display_name": "b"}]),
+            ),
+            patch.object(permissions_routes.permission, "revoke_master", AsyncMock(return_value=False)),
+        ):
+            response = await self.client.delete("/api/permissions/masters/9")
+            self.assertEqual(response.status, 404)
 
 
 if __name__ == "__main__":

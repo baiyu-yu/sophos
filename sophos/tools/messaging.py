@@ -48,7 +48,10 @@ class SendMessageTool(Tool):
     parameters = {
         "type": "object",
         "properties": {
-            "text": {"type": "string", "description": "文本内容"},
+            "text": {
+                "type": "string",
+                "description": "文本内容；用换页符 \\f 分隔可拆成多条气泡（每段一条，慎用）",
+            },
             "conversation_id": {"type": "integer", "description": "目标内部会话 ID；默认当前会话"},
             "reply_to_message_id": {
                 "type": "integer",

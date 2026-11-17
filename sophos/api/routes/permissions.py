@@ -97,6 +97,44 @@ async def list_users(request: web.Request) -> web.Response:
     return web.json_response({"users": [dict(row) for row in rows]})
 
 
+# ── Master（最高权限）────────────────────────────────────
+
+
+@routes.get("/api/permissions/masters")
+async def list_masters(request: web.Request) -> web.Response:
+    pool: asyncpg.Pool = request.app["pool"]
+    return web.json_response({"masters": await permission.list_masters(pool)})
+
+
+@routes.post("/api/permissions/masters")
+async def grant_master(request: web.Request) -> web.Response:
+    """把用户设为 Master（隐式拥有全部权限）。"""
+    pool: asyncpg.Pool = request.app["pool"]
+    payload = await request.json()
+    user_id = _parse_int(payload.get("user_id"), "user_id")
+    if user_id <= 0:
+        raise web.HTTPBadRequest(reason="user_id 必须是正整数")
+    await _require_user(pool, user_id)
+    added = await permission.grant_master(pool, user_id)
+    return web.json_response(
+        {"message": f"已把用户 {user_id} 设为 Master" if added else f"用户 {user_id} 已经是 Master"}
+    )
+
+
+@routes.delete("/api/permissions/masters/{user_id}")
+async def revoke_master(request: web.Request) -> web.Response:
+    """撤销 Master 角色；至少保留一个。"""
+    pool: asyncpg.Pool = request.app["pool"]
+    user_id = _parse_int(request.match_info["user_id"], "user_id")
+    masters = await permission.list_masters(pool)
+    if len(masters) <= 1 and any(int(m["user_id"]) == user_id for m in masters):
+        raise web.HTTPBadRequest(reason="至少保留一个 Master，无法撤销最后一个")
+    removed = await permission.revoke_master(pool, user_id)
+    if not removed:
+        return web.json_response({"message": "该用户不是 Master"}, status=404)
+    return web.json_response({"message": f"已取消用户 {user_id} 的 Master 角色"})
+
+
 @routes.get("/api/permissions/conversations")
 async def list_conversations(request: web.Request) -> web.Response:
     """List internal conversations for scope selection without exposing protocol IDs."""

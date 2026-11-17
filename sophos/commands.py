@@ -1187,10 +1187,10 @@ async def handle_help_command(
         "  · 私聊消息必回；群聊默认 @机器人 必回，普通消息按概率触发",
         "    （.trigger at off / .trigger rate 可调）",
         "  · 前缀可在 WebUI「设置」页修改；模型、Prompt、插件、协议端均在 WebUI 管理",
+        "  · Master（最高权限）在 WebUI「权限管理 → 最高权限」设置，失败告警会私信 Master",
     ]
     await _reply(context, "\n".join(lines))
     return True
-
 
 
 # ── .bot ──────────────────────────────────────────────────

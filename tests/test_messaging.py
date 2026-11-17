@@ -171,6 +171,43 @@ class MessageServiceTests(unittest.IsolatedAsyncioTestCase):
         store.get_delivery_locator.assert_not_awaited()
         adapter.send_message.assert_awaited_once()
 
+    async def test_bubble_separator_sends_multiple_messages(self) -> None:
+        store = AsyncMock()
+        store.save_outbound_message.side_effect = [11, 12, 13]
+        platform_store = AsyncMock()
+        platform_store.get_conversation.return_value = _conversation()
+        router = AdapterRouter()
+        adapter = _FakeAdapter()
+        router.register(adapter)
+        service = MessageService(store, platform_store, router)
+
+        sent = await service.send_message(SendMessageRequest(conversation_id=20, text="第一\f第二\f第三"))
+
+        self.assertEqual(sent.message_id, 13)
+        self.assertEqual(adapter.send_message.await_count, 3)
+        texts = [call.args[0].segments[0]["data"]["text"] for call in adapter.send_message.await_args_list]
+        self.assertEqual(texts, ["第一", "第二", "第三"])
+        self.assertEqual(store.save_outbound_message.await_count, 3)
+
+    async def test_bubble_reply_only_attached_to_first_part(self) -> None:
+        store = AsyncMock()
+        store.get_delivery_locator.return_value = (11, 20, "55")
+        store.save_outbound_message.return_value = 1
+        platform_store = AsyncMock()
+        platform_store.get_conversation.return_value = _conversation()
+        router = AdapterRouter()
+        adapter = _FakeAdapter()
+        router.register(adapter)
+        service = MessageService(store, platform_store, router)
+
+        await service.send_message(SendMessageRequest(conversation_id=20, text="a\fb", reply_to_message_id=3))
+
+        first = adapter.send_message.await_args_list[0].args[0].segments
+        second = adapter.send_message.await_args_list[1].args[0].segments
+        self.assertEqual([segment["type"] for segment in first], ["reply", "text"])
+        self.assertEqual([segment["type"] for segment in second], ["text"])
+        self.assertIsNone(store.save_outbound_message.await_args_list[1].kwargs["reply_to_message_id"])
+
     async def test_reply_must_belong_to_current_delivery_scope(self) -> None:
         store = AsyncMock()
         store.get_delivery_locator.return_value = (99, 20, "10")

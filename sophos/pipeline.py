@@ -16,7 +16,7 @@ from typing import Any
 import aiohttp
 import asyncpg
 
-from sophos import observability, prompts, runtime_config, trigger
+from sophos import alerting, observability, prompts, runtime_config, trigger
 from sophos.agent import (
     AgentTool,
     LLMNodeExecutor,
@@ -388,18 +388,6 @@ def _is_recognizing(row: dict[str, Any]) -> bool:
     return bool(extra.get("images_recognizing"))
 
 
-async def _notify_workflow_failure(ctx: PipelineContext) -> None:
-    try:
-        await ctx.message_service.send_message(
-            SendMessageRequest(
-                conversation_id=ctx.conversation_id,
-                text="模型服务暂时无响应，请稍后再试。",
-            )
-        )
-    except Exception:
-        logger.exception("Failed to notify conversation after agent workflow failure")
-
-
 async def _handle_llm_trigger(ctx: PipelineContext) -> None:
     """Build context and execute the configured provider-neutral agent graph."""
     registry = _get_registry()
@@ -676,7 +664,14 @@ async def _handle_llm_trigger(ctx: PipelineContext) -> None:
             await observability.record_error("workflow", exc)
         observability.workflow_failed()
         logger.exception("Agent workflow failed")
-        await _notify_workflow_failure(ctx)
+        # 不在会话里发「模型服务暂时无响应」之类的噪音，只累计并提醒 Master。
+        await alerting.record_failure(
+            pool=get_pool(),
+            message_service=ctx.message_service,
+            platform_store=ctx.message_service.platform_store,
+            conversation_id=ctx.conversation_id,
+            reason=f"{type(exc).__name__}: {exc}",
+        )
         return
     ctx.state["agent_workflow"] = run.to_state_dict()
     ctx.state["agent_transcript"] = transcript.to_list()

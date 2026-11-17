@@ -54,6 +54,39 @@ async def list_masters(pool: asyncpg.Pool) -> list[dict[str, object]]:
     return [dict(row) for row in rows]
 
 
+def invalidate_roles() -> None:
+    """清除 master 角色缓存，下次访问时重新加载。"""
+    global _masters, _roles_loaded  # noqa: PLW0603
+    _masters = frozenset()
+    _roles_loaded = False
+
+
+async def grant_master(
+    pool: asyncpg.Pool,
+    user_id: int,
+    granted_by: int | None = None,
+) -> bool:
+    """授予 master 角色（最高权限）。返回是否新增。"""
+    result = await pool.execute(
+        "INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'master', $2) "
+        "ON CONFLICT DO NOTHING",
+        user_id,
+        granted_by,
+    )
+    invalidate_roles()
+    return result == "INSERT 0 1"
+
+
+async def revoke_master(pool: asyncpg.Pool, user_id: int) -> bool:
+    """撤销 master 角色。返回是否存在并已删除。"""
+    result = await pool.execute(
+        "DELETE FROM user_roles WHERE user_id = $1 AND role = 'master'",
+        user_id,
+    )
+    invalidate_roles()
+    return result == "DELETE 1"
+
+
 # ── 缓存 ─────────────────────────────────────────────────
 
 _scope_cache: dict[tuple[str, int], bool] | None = None

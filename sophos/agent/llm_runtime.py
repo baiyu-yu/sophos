@@ -135,6 +135,7 @@ class LLMNodeExecutor:
         max_rounds = node.model.max_tool_rounds or self.context.max_rounds_per_node
         renderer = self.context.system_prompt_renderer
         system_prompt = renderer(node) if renderer is not None else None
+        nudged = False
         for round_number in range(1, max_rounds + 1):
             request_messages = _with_node_instructions(
                 self.context.messages_for_node(node.node_id, run.workflow),
@@ -190,6 +191,21 @@ class LLMNodeExecutor:
                 )
                 if implicit is not None:
                     return implicit
+                if not nudged and round_number < max_rounds:
+                    # 有些提供商忽略 tool_choice=required，只返回文本；追加一次明确提醒再试。
+                    nudged = True
+                    nudge: Message = {
+                        "role": "user",
+                        "content": (
+                            "系统提示：上一轮没有调用任何工具。请立即调用一个可用工具——"
+                            "需要回复用 send_message，保持沉默用 finish_without_reply，"
+                            "需要流转时调用工作流转换工具；不要只输出文本。"
+                        ),
+                    }
+                    self.context.append_node_message(nudge, node.node_id)
+                    run.transcript.append(new_event("message", {"message": nudge}, node_id=node.node_id))
+                    logger.info("LLM 节点 %s 未调用工具，追加工具提醒后重试", node.node_id)
+                    continue
                 logger.warning(
                     "LLM 节点 %s 既没有返回文本也没有调用工具（finish=%s），本轮不会有回复",
                     node.node_id,

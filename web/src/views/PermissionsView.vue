@@ -67,6 +67,11 @@ interface ConversationItem {
   account_display_name: string
 }
 
+interface MasterItem {
+  user_id: number
+  display_name: string
+}
+
 // ── 常量 ──
 
 const ALL_PERMS = [
@@ -93,6 +98,9 @@ const policies = ref<PolicyItem[]>([])
 const users = ref<UserItem[]>([])
 const conversations = ref<ConversationItem[]>([])
 const availableTools = ref<string[]>([])
+const masters = ref<MasterItem[]>([])
+const masterUserId = ref<number | null>(null)
+const assigningMaster = ref(false)
 
 const expandedScope = ref('')
 
@@ -154,6 +162,16 @@ const conversationOptions = computed(() => conversations.value.map(conversation 
   value: String(conversation.conversation_id),
   label: `${conversation.display_name || conversation.kind} (#${conversation.conversation_id}, ${conversation.platform})`,
 })))
+
+const masterOptions = computed(() => {
+  const current = new Set(masters.value.map(master => master.user_id))
+  return users.value
+    .filter(user => !current.has(user.user_id))
+    .map(user => ({
+      value: user.user_id,
+      label: `${user.display_name || '未命名用户'} (#${user.user_id})`,
+    }))
+})
 
 function conversationLabel(conversationId: number) {
   const conversation = conversations.value.find(item => item.conversation_id === conversationId)
@@ -460,6 +478,45 @@ async function deletePolicy() {
   }
 }
 
+// ── API: Master（最高权限） ──
+
+async function loadMasters() {
+  try {
+    const { data } = await api.get('/permissions/masters')
+    masters.value = data.masters
+  } catch (e: any) {
+    message.error(errorText(e, '加载 Master 列表失败'))
+  }
+}
+
+async function addMaster() {
+  if (!masterUserId.value) {
+    message.warning('请选择要设为 Master 的用户')
+    return
+  }
+  assigningMaster.value = true
+  try {
+    const { data } = await api.post('/permissions/masters', { user_id: masterUserId.value })
+    message.success(data.message)
+    masterUserId.value = null
+    await Promise.all([loadMasters(), loadUsers()])
+  } catch (e: any) {
+    message.error(errorText(e, '设置 Master 失败'))
+  } finally {
+    assigningMaster.value = false
+  }
+}
+
+async function removeMaster(master: MasterItem) {
+  try {
+    const { data } = await api.delete(`/permissions/masters/${master.user_id}`)
+    message.success(data.message)
+    await Promise.all([loadMasters(), loadUsers()])
+  } catch (e: any) {
+    message.error(errorText(e, '取消 Master 失败'))
+  }
+}
+
 // ── 初始化 ──
 
 onMounted(() => {
@@ -469,6 +526,7 @@ onMounted(() => {
   loadAvailableTools()
   loadUsers()
   loadConversations()
+  loadMasters()
 })
 </script>
 
@@ -477,11 +535,58 @@ onMounted(() => {
     <div class="page-header">
       <div>
         <h1 class="page-title">权限管理</h1>
-        <p class="page-subtitle">管理会话权限、用户授权与触发策略</p>
+        <p class="page-subtitle">设置 Master（最高权限）、管理会话权限、用户授权与触发策略</p>
       </div>
     </div>
 
     <NTabs type="line" animated class="perm-tabs">
+      <!-- ── Tab 0: 最高权限（Master） ── -->
+      <NTabPane name="master" tab="最高权限">
+        <div class="tab-header">
+          <NText depth="3">
+            Master 拥有全部权限，不受会话白名单与授权限制；运行失败告警也会私信给 Master
+          </NText>
+        </div>
+
+        <div class="master-panel glass-panel-heavy">
+          <div class="master-add">
+            <NSelect
+              v-model:value="masterUserId"
+              :options="masterOptions"
+              filterable
+              placeholder="选择要设为 Master 的用户"
+            />
+            <NButton
+              type="primary"
+              :disabled="!masterUserId"
+              :loading="assigningMaster"
+              @click="addMaster"
+            >
+              设为 Master
+            </NButton>
+          </div>
+
+          <div class="master-list">
+            <div v-for="master in masters" :key="master.user_id" class="master-row">
+              <div class="master-info">
+                <span class="master-name">{{ master.display_name || '未命名用户' }}</span>
+                <NTag size="small" type="warning" round :bordered="false">Master</NTag>
+                <span class="master-id">#{{ master.user_id }}</span>
+              </div>
+              <NPopconfirm @positive-click="removeMaster(master)">
+                <template #trigger>
+                  <NButton size="small" quaternary type="error">取消</NButton>
+                </template>
+                确认取消该用户的 Master 权限？
+              </NPopconfirm>
+            </div>
+            <div v-if="masters.length === 0" class="master-empty">
+              还没有 Master。请选择一个用户设为 Master，否则失败告警无法私信通知。
+            </div>
+          </div>
+        </div>
+      </NTabPane>
+
       <!-- ── Tab 1: 会话权限 ── -->
       <NTabPane name="scopes" tab="会话权限">
         <div class="tab-header">
@@ -1029,6 +1134,63 @@ onMounted(() => {
   font-size: 0.85rem;
   opacity: 0.7;
   white-space: nowrap;
+}
+
+/* ── Master 管理 ── */
+
+.master-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.master-add {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.master-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.master-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.master-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.master-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.master-id {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  opacity: 0.6;
+}
+
+.master-empty {
+  padding: 24px;
+  text-align: center;
+  opacity: 0.65;
 }
 
 /* ── 抽屉 ── */

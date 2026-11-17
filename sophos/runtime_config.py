@@ -51,6 +51,10 @@ _DEFAULTS: dict[str, Any] = {
     "trigger_memory_min_score": 0.6,
     "trigger_bucket_capacity": 10,
     "trigger_bucket_refill": 6.0,
+    # 失败告警：同一会话在窗口内累计到阈值后私信 Master
+    "failure_alert_threshold": 3,
+    "failure_alert_window_seconds": 600,
+    "failure_alert_cooldown_seconds": 1800,
     # 命令前缀（WebUI 可改，"." 始终兼容）
     "command_prefix": ".",
     # Tavily 联网搜索
