@@ -17,6 +17,17 @@ from sophos.platform import Capability, SendMessageRequest
 from sophos.tools.base import Tool
 
 
+def _positive_id(value: Any) -> int | None:
+    """把模型给的 ID 参数归一化成正整数；0、负数、空值都视为「未提供」。"""
+    if value is None or value == "":
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 class FinishWithoutReplyTool(Tool):
     category = "output"
     group = "messaging"
@@ -39,7 +50,10 @@ class SendMessageTool(Tool):
         "properties": {
             "text": {"type": "string", "description": "文本内容"},
             "conversation_id": {"type": "integer", "description": "目标内部会话 ID；默认当前会话"},
-            "reply_to_message_id": {"type": "integer", "description": "要回复的内部消息 ID"},
+            "reply_to_message_id": {
+                "type": "integer",
+                "description": "要回复的内部消息 ID；不需要回复时省略该参数（传 0 也表示不回复）",
+            },
             "mention_user_ids": {
                 "type": "array",
                 "items": {"type": "integer"},
@@ -68,8 +82,14 @@ class SendMessageTool(Tool):
             SendMessageRequest(
                 conversation_id=conversation_id,
                 text=text,
-                reply_to_message_id=params.get("reply_to_message_id"),
-                mention_user_ids=tuple(params.get("mention_user_ids") or ()),
+                reply_to_message_id=_positive_id(params.get("reply_to_message_id")),
+                mention_user_ids=tuple(
+                    user_id
+                    for user_id in (
+                        _positive_id(value) for value in (params.get("mention_user_ids") or ())
+                    )
+                    if user_id is not None
+                ),
                 metadata=metadata,
             )
         )

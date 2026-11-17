@@ -156,6 +156,21 @@ class MessageServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["external_message_id"], "900")
         self.assertEqual(saved["sender_identity_id"], 32)
 
+    async def test_zero_reply_target_is_treated_as_no_reply(self) -> None:
+        store = AsyncMock()
+        store.save_outbound_message.return_value = 1
+        platform_store = AsyncMock()
+        platform_store.get_conversation.return_value = _conversation()
+        router = AdapterRouter()
+        adapter = _FakeAdapter()
+        router.register(adapter)
+        service = MessageService(store, platform_store, router)
+
+        await service.send_message(SendMessageRequest(conversation_id=20, text="hi", reply_to_message_id=0))
+
+        store.get_delivery_locator.assert_not_awaited()
+        adapter.send_message.assert_awaited_once()
+
     async def test_reply_must_belong_to_current_delivery_scope(self) -> None:
         store = AsyncMock()
         store.get_delivery_locator.return_value = (99, 20, "10")
@@ -184,6 +199,20 @@ class MessagingToolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("error", result)
         service.send_message.assert_not_awaited()
+
+    async def test_send_tool_ignores_zero_reply_and_mention_ids(self) -> None:
+        service = AsyncMock()
+        tool = SendMessageTool()
+        context = {"message_service": service, "conversation_id": 20}
+
+        await tool.execute(
+            {"text": "hello", "reply_to_message_id": 0, "mention_user_ids": [0, 5]},
+            context,
+        )
+
+        request = service.send_message.await_args.args[0]
+        self.assertIsNone(request.reply_to_message_id)
+        self.assertEqual(request.mention_user_ids, (5,))
 
     def test_tool_schema_is_platform_neutral_and_capability_filtered(self) -> None:
         registry = ToolRegistry()
