@@ -69,6 +69,45 @@ async def refresh_provider_models(request: web.Request) -> web.Response:
     )
 
 
+_SLOT_SWITCHERS = {
+    "default": "switch",
+    "collector": "switch_collector",
+    "vision": "switch_vision",
+    "trigger": "switch_trigger",
+    "embedding": "switch_embedding",
+}
+
+
+@routes.post("/api/providers/{alias}/activate")
+async def activate_provider_model(request: web.Request) -> web.Response:
+    """把 provider 的某个模型绑定到指定 slot（WebUI 模型列表点击使用）。"""
+    provider_mgr: ProviderManager = request.app["provider_mgr"]
+    alias = request.match_info["alias"]
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise web.HTTPBadRequest(reason="请求体必须是 JSON") from exc
+    if not isinstance(payload, dict):
+        raise web.HTTPBadRequest(reason="请求体必须是 JSON 对象")
+
+    slot = str(payload.get("slot") or "default")
+    model = str(payload.get("model") or "").strip()
+    api_type = str(payload.get("api_type") or "openai")
+    if not model:
+        raise web.HTTPBadRequest(reason="model 不能为空")
+    method_name = _SLOT_SWITCHERS.get(slot)
+    if method_name is None:
+        raise web.HTTPBadRequest(reason=f"未知 slot: {slot}")
+
+    switcher = getattr(provider_mgr, method_name)
+    if slot == "embedding":
+        message = await switcher(alias, model)
+    else:
+        message = await switcher(alias, model, api_type=api_type)
+    failed = any(word in message for word in ("不存在", "无法", "未配置", "失败"))
+    return web.json_response({"message": message, "slot": slot, "model": model}, status=400 if failed else 200)
+
+
 @routes.post("/api/providers")
 async def create_provider(request: web.Request) -> web.Response:
     """新增 provider。"""
@@ -99,6 +138,16 @@ async def create_provider(request: web.Request) -> web.Response:
         request_policy=request_policy,
     )
     status = 400 if "已存在" in result or "至少提供" in result else 200
+    if status == 200:
+        # 创建成功后自动拉取一次模型列表，省去用户手动刷新。
+        fetched = await provider_mgr.fetch_models(alias)
+        if isinstance(fetched, list):
+            return web.json_response(
+                {
+                    "message": f"{result}，已获取 {len(fetched)} 个可用模型",
+                    "models": fetched,
+                }
+            )
     return web.json_response({"message": result}, status=status)
 
 

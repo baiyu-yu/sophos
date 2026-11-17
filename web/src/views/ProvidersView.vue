@@ -4,6 +4,7 @@ import {
   NCard,
   NDrawer,
   NDrawerContent,
+  NDropdown,
   NInput,
   NSpace,
   NTag,
@@ -56,6 +57,15 @@ const { isDark } = useTheme()
 const providers = ref<ProviderItem[]>([])
 const loading = ref(false)
 const refreshingModels = ref(new Set<string>())
+const activatingModel = ref(new Set<string>())
+
+const SLOT_OPTIONS = [
+  { label: '对话回复（default）', key: 'default' },
+  { label: '信息收集（collector）', key: 'collector' },
+  { label: '图片识别（vision）', key: 'vision' },
+  { label: '触发判断（trigger）', key: 'trigger' },
+  { label: '向量嵌入（embedding）', key: 'embedding' },
+]
 
 const expandedAlias = ref('')
 const revealedKeys = reactive<Record<string, string>>({})
@@ -232,6 +242,25 @@ async function refreshModels(alias: string) {
   }
 }
 
+async function activateModel(provider: ProviderItem, model: string, slot: string) {
+  const key = `${provider.alias}:${model}:${slot}`
+  if (activatingModel.value.has(key)) return
+  activatingModel.value.add(key)
+  try {
+    const { data } = await api.post(`/providers/${encodeURIComponent(provider.alias)}/activate`, {
+      slot,
+      model,
+      api_type: provider.preferred_api_type,
+    })
+    message.success(data.message)
+    await loadProviders()
+  } catch (error: any) {
+    message.error(error?.response?.data?.reason ?? error?.response?.data?.message ?? '切换模型失败')
+  } finally {
+    activatingModel.value.delete(key)
+  }
+}
+
 async function createProvider() {
   const baseUrls = cleanBaseUrls({
     openai: addForm.openai,
@@ -396,6 +425,16 @@ onMounted(loadProviders)
               <span>{{ provider.model_count }} 个</span>
               <component :is="expandedAlias === provider.alias ? ChevronDown : ChevronRight" :size="16" />
             </button>
+            <NButton
+              size="tiny"
+              quaternary
+              circle
+              :loading="refreshingModels.has(provider.alias)"
+              title="获取可用模型"
+              @click="refreshModels(provider.alias)"
+            >
+              <template #icon><RefreshCw :size="14" /></template>
+            </NButton>
           </div>
         </div>
 
@@ -479,12 +518,20 @@ onMounted(loadProviders)
               />
             </div>
             <div v-if="filteredModels(provider).length > 0" class="provider-model-list">
-              <code v-for="model in filteredModels(provider)" :key="model" class="provider-model-item">
-                {{ model }}
-              </code>
+              <div v-for="model in filteredModels(provider)" :key="model" class="provider-model-row">
+                <code class="provider-model-item">{{ model }}</code>
+                <NDropdown
+                  trigger="click"
+                  :options="SLOT_OPTIONS"
+                  :disabled="activatingModel.has(`${provider.alias}:${model}:default`)"
+                  @select="(slot: string) => activateModel(provider, model, slot)"
+                >
+                  <NButton size="tiny" tertiary>设为…</NButton>
+                </NDropdown>
+              </div>
             </div>
             <div v-else class="provider-model-empty">
-              暂无可用模型，或搜索无结果
+              暂无可用模型，点击上方刷新按钮获取
             </div>
           </div>
         </div>
@@ -894,6 +941,18 @@ onMounted(loadProviders)
   gap: 8px;
   max-height: 240px;
   overflow: auto;
+}
+
+.provider-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.provider-model-row :deep(.provider-model-item) {
+  flex: 1;
+  min-width: 0;
 }
 
 .provider-model-item {

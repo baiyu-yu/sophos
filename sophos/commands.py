@@ -986,8 +986,10 @@ async def handle_help_command(
     scope_id: int,
 ) -> bool:
     """处理 .help 命令。根据用户权限动态显示可用命令。"""
+    prefix = str(runtime_config.get("command_prefix") or ".")
     lines = [
         "可用命令:",
+        f"  （当前前缀 {prefix}，. 也始终可用）",
         "  .ping   — 连通测试",
         "  .help   — 显示此帮助",
         "  .bot    — 会话开关",

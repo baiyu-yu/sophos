@@ -57,6 +57,11 @@ const router = createRouter({
           name: 'permissions',
           component: () => import('@/views/PermissionsView.vue'),
         },
+        {
+          path: 'settings',
+          name: 'settings',
+          component: () => import('@/views/SettingsView.vue'),
+        },
       ],
     },
     {

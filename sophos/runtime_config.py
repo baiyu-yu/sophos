@@ -50,6 +50,8 @@ _DEFAULTS: dict[str, Any] = {
     "trigger_memory_min_score": 0.6,
     "trigger_bucket_capacity": 10,
     "trigger_bucket_refill": 6.0,
+    # 命令前缀（WebUI 可改，"." 始终兼容）
+    "command_prefix": ".",
     # Tavily 联网搜索
     "tavily_api_key": "",
     "tavily_max_results": 5,

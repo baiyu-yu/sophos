@@ -33,6 +33,7 @@ import {
   SunMoon,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings,
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -74,6 +75,7 @@ const menuOptions = [
   { label: '工具管理', key: 'tools', icon: renderIcon(Wrench) },
   { label: '插件', key: 'plugins', icon: renderIcon(Puzzle) },
   { label: '权限管理', key: 'permissions', icon: renderIcon(Shield) },
+  { label: '设置', key: 'settings', icon: renderIcon(Settings) },
 ]
 
 function handleMenuUpdate(key: string) {

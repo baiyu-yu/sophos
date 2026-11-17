@@ -778,9 +778,14 @@ _FULLWIDTH_COMMAND_PREFIXES = "。．｡"
 
 
 def _normalize_command_prefix(text: str) -> str:
-    """把中文全角句号等前缀统一成半角点，兼容「。help」这类输入。"""
+    """把自定义前缀或中文全角句号统一成半角点，便于命令分发。"""
     stripped = text.lstrip()
-    if stripped[:1] and stripped[0] in _FULLWIDTH_COMMAND_PREFIXES:
+    if not stripped:
+        return ""
+    prefix = str(runtime_config.get("command_prefix") or ".").strip()
+    if prefix and prefix != "." and stripped.startswith(prefix):
+        return f".{stripped[len(prefix):]}"
+    if stripped[0] in _FULLWIDTH_COMMAND_PREFIXES:
         return f".{stripped[1:]}"
     return stripped
 
