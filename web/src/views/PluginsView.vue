@@ -18,7 +18,6 @@ import {
   NText,
   useDialog,
   useMessage,
-  type UploadFileInfo,
 } from 'naive-ui'
 import {
   ExternalLink,
@@ -174,14 +173,22 @@ function confirmUninstall(plugin: PluginInfo) {
 }
 
 // ── 上传 ──
+const fileInput = ref<HTMLInputElement | null>(null)
+
 function openUpload() {
   uploadFile.value = null
   overwrite.value = false
   uploadVisible.value = true
 }
 
-function onFileChange({ fileList }: { fileList: UploadFileInfo[] }) {
-  uploadFile.value = fileList[0]?.file ?? null
+function pickFile() {
+  fileInput.value?.click()
+}
+
+function onFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  uploadFile.value = input.files?.[0] ?? null
+  input.value = ''
 }
 
 function formatSize(size: number): string {
@@ -442,12 +449,17 @@ onMounted(async () => {
           支持 <code>.zip</code> 目录插件包（压缩包内需包含 <code>plugin.py</code>）或单个
           <code>.py</code> 文件。上传后立即加载，插件默认启用。
         </NAlert>
-        <NUpload :default-upload="false" :max="1" accept=".zip,.py" @change="onFileChange">
-          <NButton dashed>
-            <template #icon><Upload :size="16" /></template>
-            选择文件
-          </NButton>
-        </NUpload>
+        <input
+          ref="fileInput"
+          class="plugin-file-input"
+          type="file"
+          accept=".zip,.py"
+          @change="onFileChange"
+        />
+        <NButton dashed @click="pickFile">
+          <template #icon><Upload :size="16" /></template>
+          选择文件
+        </NButton>
         <NText v-if="uploadFile" depth="2">
           {{ uploadFile.name }}（{{ formatSize(uploadFile.size) }}）
         </NText>
@@ -677,6 +689,10 @@ onMounted(async () => {
 
 .plugin-modal :deep(.n-card__content) {
   padding-top: 8px;
+}
+
+.plugin-file-input {
+  display: none;
 }
 
 @media (max-width: 767px) {
