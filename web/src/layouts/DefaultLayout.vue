@@ -66,13 +66,13 @@ const activeMenu = computed(() => (route.name as string) ?? 'dashboard')
 
 const menuOptions = [
   { label: '仪表盘', key: 'dashboard', icon: renderIcon(Gauge) },
+  { label: '协议端', key: 'connections', icon: renderIcon(Plug) },
   { label: '日志', key: 'logs', icon: renderIcon(ScrollText) },
   { label: '模型服务商', key: 'providers', icon: renderIcon(Orbit) },
   { label: '工作流', key: 'workflow', icon: renderIcon(Workflow) },
   { label: 'Prompt', key: 'prompts', icon: renderIcon(FileText) },
   { label: '工具管理', key: 'tools', icon: renderIcon(Wrench) },
   { label: '插件', key: 'plugins', icon: renderIcon(Puzzle) },
-  { label: '协议端', key: 'connections', icon: renderIcon(Plug) },
   { label: '权限管理', key: 'permissions', icon: renderIcon(Shield) },
 ]
 

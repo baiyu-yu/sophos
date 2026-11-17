@@ -380,8 +380,13 @@ onUnmounted(() => {
       description="暂无连接，点击「新增连接」开始"
     />
 
-    <NModal v-model:show="modalVisible" preset="card" class="connection-modal" :title="editingId === null ? '新增连接' : '编辑连接'">
-      <NForm label-placement="left" label-width="110">
+    <NModal
+      v-model:show="modalVisible"
+      preset="card"
+      :style="{ width: '520px', maxWidth: '92vw' }"
+      :title="editingId === null ? '新增连接' : '编辑连接'"
+    >
+      <NForm label-placement="top" size="small">
         <NFormItem label="名称">
           <NInput v-model:value="form.name" placeholder="例如：主机器人" />
         </NFormItem>
@@ -518,11 +523,6 @@ onUnmounted(() => {
 
 .empty-state {
   padding: 48px 0;
-}
-
-.connection-modal {
-  width: 460px;
-  max-width: 92vw;
 }
 
 @media (max-width: 767px) {

@@ -34,6 +34,20 @@ _ingest = Pipeline(INGEST_STAGES)
 _response = Pipeline(RESPONSE_STAGES)
 
 
+def _log_preview(text: str, limit: int = 200) -> str:
+    """Collapse a message body into one log-friendly line."""
+    collapsed = " ".join((text or "").split())
+    return collapsed if len(collapsed) <= limit else f"{collapsed[:limit]}…"
+
+
+def _describe_message(message: Any) -> str:
+    """Summarise message content for the received-message log line."""
+    if _log_preview(message.plain_text):
+        return _log_preview(message.plain_text)
+    kinds = sorted({str(segment.get("type", "unknown")) for segment in message.segments})
+    return f"[非文本消息: {', '.join(kinds)}]" if kinds else "[空消息]"
+
+
 async def handle_event(
     adapter: PlatformAdapter,
     event: dict[str, Any],
@@ -47,6 +61,16 @@ async def handle_event(
     message = await adapter.normalize_event(event)
     if message is None:
         return
+    logger.info(
+        "收到消息 conversation=%s(%s) account=%s sender=%s(%s) message=%s content=%s",
+        message.conversation.conversation_id,
+        message.conversation.kind.value,
+        message.account_id,
+        message.sender.display_name or message.sender.external_user_id,
+        message.sender.external_user_id,
+        message.external_message_id,
+        _describe_message(message),
+    )
     ctx = PipelineContext.from_event(message, adapter, message_service, store, provider_mgr, session)
     if memory_store is not None:
         ctx.state["memory_store"] = memory_store
