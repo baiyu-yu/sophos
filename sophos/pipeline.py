@@ -774,13 +774,25 @@ class FilterSelfStage(Stage):
         await next_stage()
 
 
+_FULLWIDTH_COMMAND_PREFIXES = "。．｡"
+
+
+def _normalize_command_prefix(text: str) -> str:
+    """把中文全角句号等前缀统一成半角点，兼容「。help」这类输入。"""
+    stripped = text.lstrip()
+    if stripped[:1] and stripped[0] in _FULLWIDTH_COMMAND_PREFIXES:
+        return f".{stripped[1:]}"
+    return stripped
+
+
 def _strip_at_prefix(ctx: PipelineContext) -> str:
     """去除消息开头的 @bot，使 '@sophos .help' 等命令正常工作。"""
     text = ctx.text
-    if not ctx.message.metadata.get("leading_self_mention"):
-        return text
-    m = re.match(r"^@\S+\s*", text)
-    return text[m.end() :] if m else text
+    if ctx.message.metadata.get("leading_self_mention"):
+        m = re.match(r"^@\S+\s*", text)
+        if m:
+            text = text[m.end() :]
+    return _normalize_command_prefix(text)
 
 
 class CheckScopeStage(Stage):

@@ -177,6 +177,16 @@ class TriggerEngine:
                 await observability.update_trigger(event_id, status="responding")
                 try:
                     await _handle_llm_trigger(ctx)
+                except RuntimeError as exc:
+                    if "No LLM provider configured" in str(exc):
+                        logger.warning(
+                            "未配置 LLM 供应商，跳过回复：请在「模型服务商」添加供应商并选择默认模型"
+                        )
+                        trace.failed = True
+                        return
+                    trace.failed = True
+                    await observability.record_error("workflow", exc)
+                    raise
                 except (Exception, asyncio.CancelledError) as exc:
                     trace.failed = True
                     await observability.record_error("workflow", exc)
