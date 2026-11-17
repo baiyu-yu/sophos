@@ -394,7 +394,7 @@ def _log_model_response(node: NodeSpec, round_number: int, response: dict[str, A
     calls = message.get("tool_calls") or []
     tool_names = [str((call.get("function") or {}).get("name") or "?") for call in calls]
     usage = response.get("usage") or {}
-    logger.debug(
+    logger.info(
         "LLM 响应 node=%s round=%d finish=%s content_len=%d tools=%s output_tokens=%s",
         node.node_id,
         round_number,
@@ -404,7 +404,7 @@ def _log_model_response(node: NodeSpec, round_number: int, response: dict[str, A
         usage.get("completion_tokens"),
     )
     if content:
-        logger.debug("LLM 文本预览 node=%s: %s", node.node_id, _preview(content))
+        logger.info("LLM 文本预览 node=%s: %s", node.node_id, _preview(content))
 
 
 def _record_provider_response(

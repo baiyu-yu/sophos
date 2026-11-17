@@ -4,6 +4,7 @@
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -406,6 +407,7 @@ async def handle_trigger_command(
             f"  基础概率: {cfg.base_rate}\n"
             f"  @必回: {'开' if cfg.at_always else '关'}\n"
             f"  关键词 ({len(cfg.keywords)}):\n" + ("\n".join(kw_lines) if kw_lines else "    (无)") + f"\n{llm_line}\n"
+            f"  触发正则: {len(runtime_config.get('trigger_regexes') or [])} 条（.trigger regex 管理）\n"
             f"  延迟: {delay}s | QPS: {qps} | 等待超时: {wait_timeout}s\n"
             f"  配额桶: {bucket_cap}/{bucket_refill}s"
         )
@@ -432,6 +434,49 @@ async def handle_trigger_command(
             value = parts[2] == "on"
             await trigger.set_at_always(pool, value)
             reply = f"@必回已{'开启' if value else '关闭'}"
+
+    elif sub == "regex":
+        action = parts[2] if len(parts) > 2 else "list"
+        patterns = list(runtime_config.get("trigger_regexes") or [])
+        if action == "add":
+            pattern = " ".join(parts[3:]).strip()
+            if not pattern:
+                reply = "用法: .trigger regex add <正则>"
+            elif len(pattern) > 200:
+                reply = "正则最多 200 个字符"
+            else:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    reply = f"正则无效: {exc}"
+                else:
+                    if pattern in patterns:
+                        reply = "该正则已存在"
+                    elif len(patterns) >= 50:
+                        reply = "最多配置 50 条触发正则"
+                    else:
+                        patterns.append(pattern)
+                        await runtime_config.set_value("trigger_regexes", patterns)
+                        reply = f"已添加触发正则: {pattern}（共 {len(patterns)} 条）"
+        elif action == "remove":
+            pattern = " ".join(parts[3:]).strip()
+            if not pattern:
+                reply = "用法: .trigger regex remove <正则>"
+            elif pattern not in patterns:
+                reply = f"未找到触发正则: {pattern}"
+            else:
+                patterns.remove(pattern)
+                await runtime_config.set_value("trigger_regexes", patterns)
+                reply = f"已删除触发正则: {pattern}（剩余 {len(patterns)} 条）"
+        elif action == "clear":
+            await runtime_config.set_value("trigger_regexes", [])
+            reply = "已清空全部触发正则"
+        else:
+            reply = (
+                f"触发正则 ({len(patterns)}):\n" + "\n".join(f"  {p}" for p in patterns)
+                if patterns
+                else "触发正则 (0): 未配置\n用法: .trigger regex add <正则>"
+            )
 
     elif sub == "add":
         if len(parts) < 4:
@@ -1004,6 +1049,7 @@ _COMMAND_DETAILS: dict[str, tuple[str, str]] = {
         "  .trigger                   — 当前配置\n"
         "  .trigger rate <0~1>        — 群聊普通消息的基础回复概率\n"
         "  .trigger at <on|off>       — 是否 @ 机器人必回\n"
+        "  .trigger regex …           — 触发正则：list/add/remove/clear\n"
         "  .trigger add <词> <boost>  — 添加关键词加权\n"
         "  .trigger remove <词>\n"
         "  .trigger mute <用户ID> [备注] / .trigger unmute <用户ID>\n"

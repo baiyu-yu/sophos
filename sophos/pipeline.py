@@ -659,7 +659,7 @@ async def _handle_llm_trigger(ctx: PipelineContext) -> None:
     )
     run = WorkflowRun(workflow=workflow, transcript=transcript, conversation_id=ctx.conversation_id)
     observability.workflow_started(run.run_id)
-    logger.debug(
+    logger.info(
         "Agent workflow 开始 run=%s workflow=%s conversation=%s",
         run.run_id,
         workflow.workflow_id,
@@ -680,7 +680,7 @@ async def _handle_llm_trigger(ctx: PipelineContext) -> None:
         return
     ctx.state["agent_workflow"] = run.to_state_dict()
     ctx.state["agent_transcript"] = transcript.to_list()
-    logger.debug(
+    logger.info(
         "Agent workflow 结束 run=%s conversation=%s nodes=%d",
         run.run_id,
         ctx.conversation_id,
@@ -1115,33 +1115,39 @@ class TriggerLLMStage(Stage):
             simple_triggered = True
             reason = "@bot"
         else:
-            max_boost = 0.0
-            matched = ""
-            for kw in cfg.keywords:
-                if kw.word in ctx.text and kw.boost > max_boost:
-                    max_boost = kw.boost
-                    matched = kw.word
-            rate = min(1.0, cfg.base_rate + max_boost)
-            if policy:
-                rate *= policy.rate_multiplier
-            reason = f"keyword '{matched}'" if matched else "base"
-
-            roll = random.random()
-            if roll < rate:
+            regex_patterns = list(runtime_config.get("trigger_regexes") or [])
+            regex_hit = trigger.match_regex(ctx.text, regex_patterns)
+            if regex_hit is not None:
                 simple_triggered = True
-                logger.debug(
-                    "Simple trigger fired: reason=%s rate=%.3f roll=%.3f",
-                    reason,
-                    rate,
-                    roll,
-                )
+                logger.info("Simple trigger fired: reason=regex %r", regex_hit)
             else:
-                logger.debug(
-                    "Simple trigger skipped: reason=%s rate=%.3f roll=%.3f",
-                    reason,
-                    rate,
-                    roll,
-                )
+                max_boost = 0.0
+                matched = ""
+                for kw in cfg.keywords:
+                    if kw.word in ctx.text and kw.boost > max_boost:
+                        max_boost = kw.boost
+                        matched = kw.word
+                rate = min(1.0, cfg.base_rate + max_boost)
+                if policy:
+                    rate *= policy.rate_multiplier
+                reason = f"keyword '{matched}'" if matched else "base"
+
+                roll = random.random()
+                if roll < rate:
+                    simple_triggered = True
+                    logger.debug(
+                        "Simple trigger fired: reason=%s rate=%.3f roll=%.3f",
+                        reason,
+                        rate,
+                        roll,
+                    )
+                else:
+                    logger.debug(
+                        "Simple trigger skipped: reason=%s rate=%.3f roll=%.3f",
+                        reason,
+                        rate,
+                        roll,
+                    )
 
         if simple_triggered:
             await engine.on_message(ctx, simple_triggered=True)

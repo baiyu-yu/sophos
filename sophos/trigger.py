@@ -3,6 +3,7 @@
 概率触发模型：
   - 私聊：始终触发
   - 群聊被 @：触发（可配置关闭）
+  - 群聊命中正则：触发（WebUI「设置」或 .trigger regex 配置）
   - 群聊含关键词：base_rate + max(匹配 boost)
   - 群聊普通消息：base_rate
 """
@@ -11,12 +12,46 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 import asyncpg
 
 logger = logging.getLogger(__name__)
+
+# 正则编译缓存：patterns 不变时复用已编译对象。
+_regex_cache: tuple[tuple[str, ...], list[re.Pattern[str]]] | None = None
+
+
+def compile_regexes(patterns: list[str]) -> list[re.Pattern[str]]:
+    """编译正则列表；非法表达式抛 re.error。"""
+    return [re.compile(pattern) for pattern in patterns]
+
+
+def match_regex(text: str, patterns: list[str]) -> str | None:
+    """返回第一条命中的正则（原字符串），未命中返回 None。"""
+    global _regex_cache  # noqa: PLW0603
+    if not patterns:
+        return None
+    key = tuple(patterns)
+    if _regex_cache is None or _regex_cache[0] != key:
+        compiled: list[re.Pattern[str]] = []
+        for pattern in patterns:
+            try:
+                compiled.append(re.compile(pattern))
+            except re.error as exc:
+                logger.warning("忽略非法的触发正则 %r: %s", pattern, exc)
+        _regex_cache = (key, compiled)
+    for pattern in _regex_cache[1]:
+        if pattern.search(text):
+            return pattern.pattern
+    return None
+
+
+def invalidate_regex_cache() -> None:
+    global _regex_cache  # noqa: PLW0603
+    _regex_cache = None
 
 
 @dataclass

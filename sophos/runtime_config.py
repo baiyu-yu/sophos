@@ -40,6 +40,7 @@ _DEFAULTS: dict[str, Any] = {
     "agent_workflow": None,
     # 触发器引擎
     "trigger_delay": 2.0,
+    "trigger_regexes": [],
     "trigger_qps": 0.5,
     "trigger_wait_timeout": 30.0,
     "trigger_eval_context_limit": 20,
