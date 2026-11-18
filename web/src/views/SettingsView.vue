@@ -31,6 +31,7 @@ const message = useMessage()
 
 const SECRET_MASK = '********'
 const TEXTAREA_KEYS = new Set(['llm_user_schema', 'llm_bot_schema', 'trigger_regexes', 'agent_workflow'])
+const LINE_LIST_KEYS = new Set(['trigger_regexes', 'response_filter_regexes'])
 
 const loading = ref(false)
 const specs = ref<ConfigSpec[]>([])
@@ -67,6 +68,10 @@ function maskSecret(value: unknown) {
 }
 
 function normalizeDraft(spec: ConfigSpec, value: unknown) {
+  if (LINE_LIST_KEYS.has(spec.key)) {
+    const list = Array.isArray(value) ? value : (spec.default as unknown[] | undefined) ?? []
+    return list.map((item) => String(item)).join('\n')
+  }
   if (spec.type === 'json') return JSON.stringify(value ?? spec.default ?? null, null, 2)
   if (spec.type === 'bool') return Boolean(value)
   if (spec.type === 'int' || spec.type === 'float' || spec.type === 'float?') {
@@ -103,6 +108,12 @@ async function loadSettings() {
 
 function coerceValue(spec: ConfigSpec, raw: unknown) {
   if (spec.type === 'bool') return Boolean(raw)
+  if (LINE_LIST_KEYS.has(spec.key)) {
+    return String(raw ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+  }
   if (spec.type === 'json') {
     try {
       return JSON.parse(String(raw ?? 'null'))
@@ -227,7 +238,13 @@ onMounted(loadSettings)
               :value="String(drafts[spec.key] ?? '')"
               type="textarea"
               :autosize="{ minRows: 3, maxRows: 12 }"
-              :placeholder="spec.default === null || spec.default === undefined ? '' : String(spec.default)"
+              :placeholder="
+                LINE_LIST_KEYS.has(spec.key)
+                  ? '每行一条正则，空行会被忽略'
+                  : spec.default === null || spec.default === undefined
+                    ? ''
+                    : String(spec.default)
+              "
               :disabled="loading || !!savingKey"
               @update:value="(value) => (drafts[spec.key] = value)"
             />

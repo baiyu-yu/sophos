@@ -58,6 +58,11 @@ class Tool(ABC):
         return True
 
     @property
+    def missing_required_hint(self) -> str:
+        """缺少必填参数时追加给模型的提示（可选）。"""
+        return ""
+
+    @property
     @abstractmethod
     def name(self) -> str:
         """工具名，如 "send_message"。"""

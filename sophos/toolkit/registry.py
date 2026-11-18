@@ -28,6 +28,13 @@ def plugin_origin(plugin_name: str) -> str:
     return f"{ORIGIN_PLUGIN_PREFIX}{plugin_name}"
 
 
+def _is_blank(value: Any) -> bool:
+    """必填参数缺失判定：None、空白字符串都算缺失。"""
+    if value is None:
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
 def origin_plugin_name(origin: str) -> str | None:
     """从来源标记中取出插件名；内置工具返回 None。"""
     if origin.startswith(ORIGIN_PLUGIN_PREFIX):
@@ -149,12 +156,16 @@ class ToolRegistry:
                 f"Tool {name} is unavailable in conversation kind: {conversation_kind or 'unknown'}"
             )
 
-        # 轻量参数校验：检查 required 字段是否齐全
+        # 轻量参数校验：检查 required 字段是否齐全（null/空白也算缺失）
         schema = tool.parameters
         required = schema.get("required", [])
-        missing = [r for r in required if r not in params]
+        missing = [key for key in required if _is_blank(params.get(key))]
         if missing:
-            return {"error": f"缺少必填参数: {', '.join(missing)}"}
+            hint = tool.missing_required_hint.strip()
+            message = f"缺少必填参数: {', '.join(missing)}"
+            if hint:
+                message = f"{message}。{hint}"
+            return {"error": message}
 
         params = strip_boundary_nulls(params, schema)
         return await tool.execute(params, context)

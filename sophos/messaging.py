@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from sophos import observability
+from sophos import observability, runtime_config
 from sophos.adapter_router import AdapterRouter
 from sophos.message_store import MessageStore
 from sophos.platform import (
@@ -39,6 +39,48 @@ def split_text_bubbles(text: str) -> list[str]:
     return bubbles or [text]
 
 
+_filter_cache: tuple[tuple[str, ...], list[re.Pattern[str]]] | None = None
+
+
+def _filter_patterns() -> list[re.Pattern[str]]:
+    """编译并缓存「响应过滤正则」。"""
+    global _filter_cache
+    raw = runtime_config.get("response_filter_regexes") or []
+    key = tuple(str(item) for item in raw)
+    if _filter_cache is not None and _filter_cache[0] == key:
+        return _filter_cache[1]
+    compiled: list[re.Pattern[str]] = []
+    for pattern in key:
+        try:
+            compiled.append(re.compile(pattern))
+        except re.error:
+            logger.warning("忽略无效的响应过滤正则: %r", pattern)
+    _filter_cache = (key, compiled)
+    return compiled
+
+
+def invalidate_filter_cache() -> None:
+    """配置变更后清空正则缓存（测试与热更新用）。"""
+    global _filter_cache
+    _filter_cache = None
+
+
+def filter_text_bubbles(bubbles: list[str]) -> tuple[list[str], list[str]]:
+    """丢弃命中响应过滤正则的气泡；返回 (保留, 命中说明)。"""
+    patterns = _filter_patterns()
+    if not patterns:
+        return bubbles, []
+    kept: list[str] = []
+    blocked: list[str] = []
+    for bubble in bubbles:
+        hit = next((pattern.pattern for pattern in patterns if pattern.search(bubble)), None)
+        if hit is None:
+            kept.append(bubble)
+        else:
+            blocked.append(f"{hit} -> {bubble[:40]}")
+    return kept, blocked
+
+
 class MessageService:
     def __init__(self, store: MessageStore, platform_store: PlatformStore, router: AdapterRouter):
         self.store = store
@@ -59,7 +101,23 @@ class MessageService:
         parts = split_text_bubbles(request.text)
         if not parts and not request.inline_media:
             raise ValueError("message content cannot be empty")
+        if parts:
+            parts, blocked = filter_text_bubbles(parts)
+            if blocked:
+                logger.info(
+                    "响应命中过滤正则，丢弃 %d 条气泡 conversation=%s：%s",
+                    len(blocked),
+                    conversation.conversation_id,
+                    blocked,
+                )
         if not parts:
+            if not request.inline_media:
+                logger.info("响应全部被过滤，未发送 conversation=%s", conversation.conversation_id)
+                return SentMessage(
+                    message_id=0,
+                    conversation_id=conversation.conversation_id,
+                    external_message_id="",
+                )
             parts = [""]
 
         sent: SentMessage | None = None

@@ -153,6 +153,13 @@ _SPECS: dict[str, ConfigSpec] = {
         _spec("trigger_bucket_capacity", "int", "令牌桶容量", "命令与触发", minimum=1, maximum=1000),
         _spec("trigger_bucket_refill", "float", "令牌桶补充速率", "命令与触发", minimum=0.1, maximum=1000.0),
         _spec(
+            "response_filter_regexes",
+            "json",
+            "响应过滤正则",
+            "命令与触发",
+            "机器人回复中命中任意一条正则的气泡会被丢弃、不发送；留空表示不过滤，最多 50 条。",
+        ),
+        _spec(
             "llm_temperature",
             "float?",
             "生成温度",
@@ -300,6 +307,7 @@ _DEFAULTS: dict[str, Any] = {
     "trigger_memory_min_score": 0.6,
     "trigger_bucket_capacity": 10,
     "trigger_bucket_refill": 6.0,
+    "response_filter_regexes": [],
     "llm_temperature": settings.llm_temperature,
     "llm_max_tokens": settings.llm_max_tokens,
     "llm_max_tool_rounds": settings.llm_max_tool_rounds,
@@ -352,13 +360,13 @@ def _validate_command_prefix(value: Any) -> str:
     return prefix
 
 
-def _validate_trigger_regexes(value: Any) -> list[str]:
+def _validate_regex_list(value: Any, label: str) -> list[str]:
     if not isinstance(value, list):
-        raise ValueError("触发正则必须是字符串数组")
+        raise ValueError(f"{label}必须是字符串数组")
     patterns: list[str] = []
     for item in value:
         if not isinstance(item, str):
-            raise ValueError("触发正则必须是字符串数组")
+            raise ValueError(f"{label}必须是字符串数组")
         pattern = item.strip()
         if not pattern:
             continue
@@ -370,8 +378,16 @@ def _validate_trigger_regexes(value: Any) -> list[str]:
             raise ValueError(f"正则无效: {pattern}（{exc}）") from exc
         patterns.append(pattern)
     if len(patterns) > _MAX_REGEX_COUNT:
-        raise ValueError(f"最多配置 {_MAX_REGEX_COUNT} 条触发正则")
+        raise ValueError(f"最多配置 {_MAX_REGEX_COUNT} 条{label}")
     return patterns
+
+
+def _validate_trigger_regexes(value: Any) -> list[str]:
+    return _validate_regex_list(value, "触发正则")
+
+
+def _validate_response_filter_regexes(value: Any) -> list[str]:
+    return _validate_regex_list(value, "响应过滤正则")
 
 
 def _validate_timezone(value: Any) -> str:
@@ -396,6 +412,7 @@ def _validate_schema(value: Any) -> str:
 _CUSTOM_VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "command_prefix": _validate_command_prefix,
     "trigger_regexes": _validate_trigger_regexes,
+    "response_filter_regexes": _validate_response_filter_regexes,
     "timezone": _validate_timezone,
     "llm_user_schema": _validate_schema,
     "llm_bot_schema": _validate_schema,

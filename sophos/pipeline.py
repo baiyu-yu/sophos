@@ -53,6 +53,7 @@ from sophos.llm.context import (
     get_display_name,
 )
 from sophos.llm.provider_manager import ProviderManager
+from sophos.llm.tool_text import parse_textual_tool_call
 from sophos.memory.association import auto_retrieve, format_association_block
 from sophos.memory.profile import build_profile_block
 from sophos.message_store import MessageStore
@@ -355,6 +356,12 @@ def _sanitize_fallback_reply(text: str) -> str | None:
     tool_name = _match_raw_tool_name(stripped)
     if tool_name:
         if tool_name == "send_message":
+            call = parse_textual_tool_call(stripped)
+            if call is not None and call.name == "send_message":
+                reply = call.text_argument()
+                if reply:
+                    logger.debug("Extracted reply text from raw send_message call")
+                    return reply
             json_m = re.search(r"\{.*\}", stripped, re.DOTALL)
             if json_m:
                 try:

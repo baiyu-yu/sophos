@@ -43,14 +43,23 @@ class SendMessageTool(Tool):
     category = "output"
     group = "messaging"
     name = "send_message"
-    description = "向当前或指定内部会话发送消息；消息、用户和会话参数均使用 Sophos 内部 ID"
+    description = (
+        "向当前或指定内部会话发送消息；必须提供 text 作为正文（即使只是回复某条消息，也要把内容写进 text）"
+    )
+    missing_required_hint = (
+        "send_message 必须提供 text 正文；回复某条消息时也要同时给出 text，"
+        "reply_to_message_id 只决定回复哪条。"
+    )
     required_capabilities = frozenset({Capability.MESSAGE_SEND.value})
     parameters = {
         "type": "object",
         "properties": {
             "text": {
                 "type": "string",
-                "description": "文本内容；用换页符 \\f 分隔可拆成多条气泡（每段一条，慎用）",
+                "description": (
+                    "文本正文（必填；只回复某条消息时也要写正文）。"
+                    "用换页符 \\f 分隔可拆成多条气泡（每段一条，慎用）"
+                ),
             },
             "conversation_id": {"type": "integer", "description": "目标内部会话 ID；默认当前会话"},
             "reply_to_message_id": {
@@ -96,6 +105,12 @@ class SendMessageTool(Tool):
                 metadata=metadata,
             )
         )
+        if sent.message_id <= 0:
+            return {
+                "status": "filtered",
+                "conversation_id": sent.conversation_id,
+                "message": "内容命中响应过滤正则，未发送",
+            }
         return {
             "status": "ok",
             "message_id": sent.message_id,

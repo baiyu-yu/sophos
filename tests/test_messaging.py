@@ -1,7 +1,8 @@
 import unittest
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+from sophos import messaging, runtime_config
 from sophos.adapter_router import AdapterRouter
 from sophos.message_store import MessageStore
 from sophos.messaging import MessageService
@@ -14,6 +15,7 @@ from sophos.platform import (
     IdentityRef,
     MessageEvent,
     SendMessageRequest,
+    SentMessage,
 )
 from sophos.tools.messaging import SendMessageTool
 from sophos.tools.registry import ToolRegistry
@@ -258,6 +260,58 @@ class MessageServiceTests(unittest.IsolatedAsyncioTestCase):
         texts = [call.args[0].segments[0]["data"]["text"] for call in adapter.send_message.await_args_list]
         self.assertEqual(texts, ["第一", "第二"])
 
+    async def test_response_filter_drops_matching_bubble(self) -> None:
+        store = AsyncMock()
+        store.save_outbound_message.return_value = 11
+        platform_store = AsyncMock()
+        platform_store.get_conversation.return_value = _conversation()
+        router = AdapterRouter()
+        adapter = _FakeAdapter()
+        router.register(adapter)
+        service = MessageService(store, platform_store, router)
+
+        try:
+            with patch.dict(
+                runtime_config._cache,
+                {"response_filter_regexes": ["广告"]},
+                clear=False,
+            ):
+                messaging.invalidate_filter_cache()
+                sent = await service.send_message(
+                    SendMessageRequest(conversation_id=20, text="正常内容\f这是广告内容")
+                )
+        finally:
+            messaging.invalidate_filter_cache()
+
+        self.assertEqual(sent.message_id, 11)
+        self.assertEqual(adapter.send_message.await_count, 1)
+        texts = [call.args[0].segments[0]["data"]["text"] for call in adapter.send_message.await_args_list]
+        self.assertEqual(texts, ["正常内容"])
+
+    async def test_response_filter_blocks_entire_message(self) -> None:
+        store = AsyncMock()
+        platform_store = AsyncMock()
+        platform_store.get_conversation.return_value = _conversation()
+        router = AdapterRouter()
+        adapter = _FakeAdapter()
+        router.register(adapter)
+        service = MessageService(store, platform_store, router)
+
+        try:
+            with patch.dict(
+                runtime_config._cache,
+                {"response_filter_regexes": ["^再见$"]},
+                clear=False,
+            ):
+                messaging.invalidate_filter_cache()
+                sent = await service.send_message(SendMessageRequest(conversation_id=20, text="再见"))
+        finally:
+            messaging.invalidate_filter_cache()
+
+        self.assertEqual(sent.message_id, 0)
+        adapter.send_message.assert_not_awaited()
+        store.save_outbound_message.assert_not_awaited()
+
     async def test_reply_must_belong_to_current_delivery_scope(self) -> None:
         store = AsyncMock()
         store.get_delivery_locator.return_value = (99, 20, "10")
@@ -289,6 +343,7 @@ class MessagingToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_tool_ignores_zero_reply_and_mention_ids(self) -> None:
         service = AsyncMock()
+        service.send_message.return_value = SentMessage(message_id=7, conversation_id=20, external_message_id="900")
         tool = SendMessageTool()
         context = {"message_service": service, "conversation_id": 20}
 
@@ -300,6 +355,30 @@ class MessagingToolTests(unittest.IsolatedAsyncioTestCase):
         request = service.send_message.await_args.args[0]
         self.assertIsNone(request.reply_to_message_id)
         self.assertEqual(request.mention_user_ids, (5,))
+
+    async def test_send_tool_reports_filtered_message(self) -> None:
+        service = AsyncMock()
+        service.send_message.return_value = SentMessage(message_id=0, conversation_id=20, external_message_id="")
+        tool = SendMessageTool()
+
+        result = await tool.execute({"text": "广告"}, {"message_service": service, "conversation_id": 20})
+
+        self.assertEqual(result["status"], "filtered")
+        self.assertIn("过滤", result["message"])
+
+    async def test_registry_missing_text_includes_hint(self) -> None:
+        registry = ToolRegistry()
+        registry.register(SendMessageTool())
+        context = {
+            "adapter_capabilities": {Capability.MESSAGE_SEND.value},
+            "message_service": AsyncMock(),
+            "conversation_id": 20,
+        }
+
+        result = await registry.execute("send_message", {"reply_to_message_id": 3}, context)
+
+        self.assertIn("text", result["error"])
+        self.assertIn("必须提供 text", result["error"])
 
     def test_tool_schema_is_platform_neutral_and_capability_filtered(self) -> None:
         registry = ToolRegistry()

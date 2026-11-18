@@ -17,6 +17,7 @@ from sophos.agent.engine import NodeOutcome, WorkflowRun, build_model_transition
 from sophos.agent.transcript import NativeEnvelope, Transcript, new_event
 from sophos.agent.workflow import NodeSpec, ToolPolicy, WorkflowDefinition
 from sophos.llm.provider import CachePlan, LLMProvider, Message, ProviderRequestOptions
+from sophos.llm.tool_text import TextualToolCall, call_from_text, normalize_tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,7 @@ class LLMNodeExecutor:
                     assistant_message,
                     allowed_action_names,
                     transition_names,
+                    run,
                 )
                 if implicit is not None:
                     return implicit
@@ -198,8 +200,8 @@ class LLMNodeExecutor:
                         "role": "user",
                         "content": (
                             "系统提示：上一轮没有调用任何工具。请立即调用一个可用工具——"
-                            "需要回复用 send_message，保持沉默用 finish_without_reply，"
-                            "需要流转时调用工作流转换工具；不要只输出文本。"
+                            "需要回复用 send_message（必须带上 text 参数写正文，即使只是回复某条消息也要写 text），"
+                            "保持沉默用 finish_without_reply，需要流转时调用工作流转换工具；不要只输出文本。"
                         ),
                     }
                     self.context.append_node_message(nudge, node.node_id)
@@ -226,6 +228,7 @@ class LLMNodeExecutor:
                 tool_name = str(function.get("name", ""))
                 call_id = str(tool_call.get("id") or f"{node.node_id}_{round_number}_{index}")
                 params, parse_error = _parse_arguments(function.get("arguments", "{}"))
+                params = normalize_tool_arguments(tool_name, params)
                 run.transcript.append(
                     new_event(
                         "tool_call",
@@ -257,9 +260,10 @@ class LLMNodeExecutor:
                         result = {"error": f"工具 {tool_name} 执行失败: {exc}"}
                     if isinstance(result, dict) and result.get("error"):
                         logger.warning(
-                            "工具 %s 返回错误（node=%s）：%s",
+                            "工具 %s 返回错误（node=%s, 参数=%s）：%s",
                             tool_name,
                             node.node_id,
+                            _preview(json.dumps(params, ensure_ascii=False, default=str), 300),
                             _preview(str(result.get("error")), 200),
                         )
                     if tool_name in self.context.completion_tools and _is_success(result):
@@ -302,9 +306,28 @@ class LLMNodeExecutor:
         assistant_message: Message,
         allowed_action_names: set[str],
         transition_names: set[str],
+        run: WorkflowRun,
     ) -> NodeOutcome | None:
         content = str(assistant_message.get("content") or "").strip()
-        if "send_message" in allowed_action_names and content:
+        if not content:
+            if len(transition_names) == 1 and "send_message" not in allowed_action_names:
+                return NodeOutcome(next(iter(transition_names)), {})
+            return None
+
+        # 有些服务商不执行 tool_choice，把 send_message(...) 写成普通文本。
+        # 这里解析成真正的调用，避免把调用语法原样发进聊天。
+        call = call_from_text(content)
+        if call is not None:
+            if call.name not in allowed_action_names and call.name not in transition_names:
+                logger.warning(
+                    "模型把工具调用写成了文本（%s），但不在节点允许范围内，忽略：%s",
+                    call.name,
+                    _preview(content, 120),
+                )
+                return None
+            return await self._run_textual_call(node, call, run, transition_names)
+
+        if "send_message" in allowed_action_names:
             try:
                 result = await self.context.tool_executor("send_message", {"text": content})
             except Exception:
@@ -316,6 +339,52 @@ class LLMNodeExecutor:
         if len(transition_names) == 1 and "send_message" not in allowed_action_names:
             return NodeOutcome(next(iter(transition_names)), {})
         return None
+
+    async def _run_textual_call(
+        self,
+        node: NodeSpec,
+        call: TextualToolCall,
+        run: WorkflowRun,
+        transition_names: set[str],
+    ) -> NodeOutcome | None:
+        """执行从文本里解析出来的工具调用，并写入 transcript 便于排查。"""
+        call_id = f"{node.node_id}_text_{run.step_count}_{len(self.context.messages)}"
+        logger.info("模型把工具调用写成了文本，已解析为真正的调用：%s", call.name)
+        run.transcript.append(
+            new_event(
+                "tool_call",
+                {"call_id": call_id, "name": call.name, "arguments": call.arguments},
+                node_id=node.node_id,
+            )
+        )
+        if self.context.on_step is not None:
+            self.context.on_step("tool_call", node.node_id, {"name": call.name})
+        if call.name in transition_names:
+            return NodeOutcome(call.name, call.arguments)
+
+        try:
+            result = await self.context.tool_executor(call.name, call.arguments)
+        except Exception as exc:
+            await observability.record_error(f"tool:{call.name}", exc)
+            logger.exception("Textual tool %s execution failed in node %s", call.name, node.node_id)
+            return None
+
+        run.transcript.append(
+            new_event(
+                "tool_result",
+                {"call_id": call_id, "name": call.name, "result": result},
+                node_id=node.node_id,
+            )
+        )
+        if isinstance(result, dict) and result.get("error"):
+            logger.warning(
+                "文本调用解析后的工具 %s 返回错误（node=%s）：%s",
+                call.name,
+                node.node_id,
+                _preview(str(result.get("error")), 200),
+            )
+            return None
+        return NodeOutcome("completed", {"completion_tool": call.name})
 
     async def _refresh_context(self, transcript: Transcript, node_id: str) -> None:
         if self.context.context_refresher is None:
