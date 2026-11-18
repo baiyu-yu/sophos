@@ -9,7 +9,7 @@ import asyncpg
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
-from sophos import observability
+from sophos import observability, runtime_config
 from sophos.adapter_router import AdapterRouter
 from sophos.api.middleware import auth_middleware
 from sophos.api.routes.stats import parse_window, routes
@@ -22,7 +22,7 @@ from sophos.trigger_engine import TriggerEngine
 
 class StatsWindowTests(unittest.TestCase):
     def test_local_day_and_inclusive_calendar_ranges(self):
-        with patch.object(settings, "timezone", "Asia/Shanghai"):
+        with patch.dict(runtime_config._cache, {"timezone": "Asia/Shanghai"}):
             now = datetime(2026, 10, 16, 17, 30, tzinfo=UTC)
             start, end, cid, _ = parse_window({"range": "week", "conversation_id": "42"}, now=now)
             self.assertEqual(start.isoformat(), "2026-10-11T00:00:00+08:00")
@@ -38,7 +38,7 @@ class StatsWindowTests(unittest.TestCase):
                 parse_window(query)
 
     def test_daylight_saving_uses_local_midnight(self):
-        with patch.object(settings, "timezone", "America/New_York"):
+        with patch.dict(runtime_config._cache, {"timezone": "America/New_York"}):
             start, end, *_ = parse_window({"range": "week"}, now=datetime(2026, 11, 2, 12, tzinfo=UTC))
             self.assertEqual(start.isoformat(), "2026-10-27T00:00:00-04:00")
             self.assertEqual(end.utcoffset().total_seconds(), -18000)

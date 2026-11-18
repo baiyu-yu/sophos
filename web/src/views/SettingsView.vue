@@ -1,111 +1,162 @@
 <script setup lang="ts">
-import { NButton, NInput, useMessage } from 'naive-ui'
+import {
+  NButton,
+  NEmpty,
+  NInput,
+  NInputNumber,
+  NSelect,
+  NSwitch,
+  NTag,
+  useMessage,
+} from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 import { RotateCcw, Save } from 'lucide-vue-next'
 import api from '@/api'
 
+interface ConfigSpec {
+  key: string
+  type: 'str' | 'int' | 'float' | 'float?' | 'bool' | 'json'
+  label: string
+  group: string
+  description: string
+  default: unknown
+  minimum: number | null
+  maximum: number | null
+  options: string[]
+  requires_restart: boolean
+  secret: boolean
+}
+
 const message = useMessage()
 
-const loading = ref(false)
-const saving = ref(false)
-const prefix = ref('.')
-const savedPrefix = ref('.')
-const regexText = ref('')
-const savedRegexText = ref('')
+const SECRET_MASK = '********'
+const TEXTAREA_KEYS = new Set(['llm_user_schema', 'llm_bot_schema', 'trigger_regexes', 'agent_workflow'])
 
-const canSave = computed(() => {
-  const value = prefix.value.trim()
-  return value.length > 0 && value.length <= 3 && !/\s/.test(value) && value !== savedPrefix.value
+const loading = ref(false)
+const specs = ref<ConfigSpec[]>([])
+const groups = ref<string[]>([])
+const values = ref<Record<string, unknown>>({})
+const drafts = ref<Record<string, unknown>>({})
+const savingKey = ref('')
+
+const groupedSpecs = computed(() => {
+  const byGroup = new Map<string, ConfigSpec[]>()
+  for (const spec of specs.value) {
+    const list = byGroup.get(spec.group) ?? []
+    list.push(spec)
+    byGroup.set(spec.group, list)
+  }
+  const order = [...groups.value, ...byGroup.keys()]
+  const result: Array<{ name: string; items: ConfigSpec[] }> = []
+  const seen = new Set<string>()
+  for (const name of order) {
+    if (seen.has(name)) continue
+    seen.add(name)
+    const items = byGroup.get(name)
+    if (items && items.length) result.push({ name, items })
+  }
+  return result
 })
 
-const regexLines = computed(() =>
-  regexText.value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean),
-)
+function errorText(error: any, fallback: string) {
+  return error?.response?.data?.error ?? error?.response?.data?.message ?? fallback
+}
 
-const canSaveRegex = computed(() => regexLines.value.join('\n') !== savedRegexText.value)
+function maskSecret(value: unknown) {
+  return value === SECRET_MASK ? '' : String(value ?? '')
+}
 
-function normalizeRegexText(value: unknown) {
-  return Array.isArray(value) ? value.map(String).join('\n') : ''
+function normalizeDraft(spec: ConfigSpec, value: unknown) {
+  if (spec.type === 'json') return JSON.stringify(value ?? spec.default ?? null, null, 2)
+  if (spec.type === 'bool') return Boolean(value)
+  if (spec.type === 'int' || spec.type === 'float' || spec.type === 'float?') {
+    return value === null || value === undefined ? null : Number(value)
+  }
+  if (spec.secret) return maskSecret(value)
+  return String(value ?? '')
+}
+
+function syncDraft(spec: ConfigSpec) {
+  drafts.value[spec.key] = normalizeDraft(spec, values.value[spec.key])
+}
+
+function isDirty(spec: ConfigSpec) {
+  return JSON.stringify(drafts.value[spec.key]) !== JSON.stringify(normalizeDraft(spec, values.value[spec.key]))
 }
 
 async function loadSettings() {
   loading.value = true
   try {
     const { data } = await api.get('/settings')
-    const value = String(data?.settings?.command_prefix ?? '.')
-    prefix.value = value
-    savedPrefix.value = value
-    const regexTextValue = normalizeRegexText(data?.settings?.trigger_regexes)
-    regexText.value = regexTextValue
-    savedRegexText.value = regexTextValue
+    specs.value = (data?.specs ?? []) as ConfigSpec[]
+    groups.value = (data?.groups ?? []) as string[]
+    values.value = { ...(data?.settings ?? {}) }
+    const next: Record<string, unknown> = {}
+    for (const spec of specs.value) next[spec.key] = normalizeDraft(spec, values.value[spec.key])
+    drafts.value = next
   } catch (error: any) {
-    message.error(error?.response?.data?.message ?? '读取设置失败')
+    message.error(errorText(error, '读取设置失败'))
   } finally {
     loading.value = false
   }
 }
 
-async function savePrefix() {
-  if (!canSave.value) return
-  saving.value = true
+function coerceValue(spec: ConfigSpec, raw: unknown) {
+  if (spec.type === 'bool') return Boolean(raw)
+  if (spec.type === 'json') {
+    try {
+      return JSON.parse(String(raw ?? 'null'))
+    } catch {
+      throw new Error('JSON 格式不合法')
+    }
+  }
+  if (spec.type === 'int' || spec.type === 'float') {
+    const num = Number(raw)
+    if (raw === null || raw === '' || !Number.isFinite(num)) throw new Error('请输入数字')
+    return num
+  }
+  if (spec.type === 'float?') {
+    if (raw === null || raw === '') return null
+    const num = Number(raw)
+    if (!Number.isFinite(num)) throw new Error('请输入数字或留空')
+    return num
+  }
+  return String(raw ?? '').trim()
+}
+
+async function saveField(spec: ConfigSpec) {
+  if (savingKey.value) return
+  savingKey.value = spec.key
   try {
-    const { data } = await api.put('/settings/command_prefix', { value: prefix.value.trim() })
-    prefix.value = data.value
-    savedPrefix.value = data.value
-    message.success(data.message ?? '已保存')
+    const value = coerceValue(spec, drafts.value[spec.key])
+    const { data } = await api.put(`/settings/${spec.key}`, { value })
+    values.value[spec.key] = data?.value
+    syncDraft(spec)
+    message.success(data?.message ?? '已保存')
   } catch (error: any) {
-    message.error(error?.response?.data?.message ?? '保存失败')
+    message.error(errorText(error, error?.message ?? '保存失败'))
   } finally {
-    saving.value = false
+    savingKey.value = ''
   }
 }
 
-async function resetPrefix() {
-  saving.value = true
+async function resetField(spec: ConfigSpec) {
+  if (savingKey.value) return
+  savingKey.value = spec.key
   try {
-    const { data } = await api.delete('/settings/command_prefix')
-    prefix.value = String(data.value ?? '.')
-    savedPrefix.value = prefix.value
-    message.success('已恢复默认前缀 .')
+    const { data } = await api.delete(`/settings/${spec.key}`)
+    values.value[spec.key] = data?.value
+    syncDraft(spec)
+    message.success('已恢复默认')
   } catch (error: any) {
-    message.error(error?.response?.data?.message ?? '恢复失败')
+    message.error(errorText(error, '恢复失败'))
   } finally {
-    saving.value = false
+    savingKey.value = ''
   }
 }
 
-async function saveRegexes() {
-  if (!canSaveRegex.value) return
-  saving.value = true
-  try {
-    const { data } = await api.put('/settings/trigger_regexes', { value: regexLines.value })
-    const saved = normalizeRegexText(data.value)
-    regexText.value = saved
-    savedRegexText.value = saved
-    message.success(data.message ?? '已保存')
-  } catch (error: any) {
-    message.error(error?.response?.data?.message ?? '保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
-async function resetRegexes() {
-  saving.value = true
-  try {
-    const { data } = await api.delete('/settings/trigger_regexes')
-    const reset = normalizeRegexText(data.value)
-    regexText.value = reset
-    savedRegexText.value = reset
-    message.success('已恢复默认（不配置正则）')
-  } catch (error: any) {
-    message.error(error?.response?.data?.message ?? '恢复失败')
-  } finally {
-    saving.value = false
-  }
+function stringOptions(spec: ConfigSpec) {
+  return spec.options.map((option) => ({ label: option, value: option }))
 }
 
 onMounted(loadSettings)
@@ -116,79 +167,98 @@ onMounted(loadSettings)
     <header class="page-header">
       <div>
         <h1 class="page-title">设置</h1>
-        <p class="page-subtitle">运行时可调项，保存后立即生效，无需重启</p>
+        <p class="page-subtitle">所有运行时配置都可在这里修改；保存后立即生效，标注「重启生效」的项在重启后生效</p>
+      </div>
+      <div class="page-actions">
+        <NButton :loading="loading" @click="loadSettings">
+          <template #icon><RotateCcw :size="16" /></template>
+          重新读取
+        </NButton>
       </div>
     </header>
 
-    <section class="glass-panel-heavy settings-card">
+    <NEmpty v-if="!loading && !specs.length" description="没有可配置项" />
+
+    <section v-for="group in groupedSpecs" :key="group.name" class="glass-panel-heavy settings-card">
       <div class="card-heading">
-        <div>
-          <h2>命令前缀</h2>
-          <p class="card-hint">
-            聊天里触发命令的前缀，例如改成 <code>!</code> 后发送 <code>!help</code>；<code>.</code> 始终兼容。
-          </p>
+        <h2>{{ group.name }}</h2>
+      </div>
+
+      <div class="field-list">
+        <div v-for="spec in group.items" :key="spec.key" class="field-row">
+          <div class="field-meta">
+            <div class="field-label">
+              {{ spec.label }}
+              <NTag v-if="spec.requires_restart" size="tiny" :bordered="false" type="warning">重启生效</NTag>
+            </div>
+            <div class="field-key">{{ spec.key }}</div>
+            <div v-if="spec.description" class="field-desc">{{ spec.description }}</div>
+          </div>
+
+          <div class="field-control">
+            <NSwitch
+              v-if="spec.type === 'bool'"
+              :value="Boolean(drafts[spec.key])"
+              :disabled="loading || !!savingKey"
+              @update:value="(value) => (drafts[spec.key] = value)"
+            />
+            <NInputNumber
+              v-else-if="spec.type === 'int' || spec.type === 'float' || spec.type === 'float?'"
+              :value="drafts[spec.key] as number | null"
+              class="number-input"
+              :min="spec.minimum ?? undefined"
+              :max="spec.maximum ?? undefined"
+              :step="spec.type === 'int' ? 1 : 0.1"
+              :precision="spec.type === 'int' ? 0 : undefined"
+              :clearable="spec.type === 'float?'"
+              :placeholder="spec.type === 'float?' ? '留空表示不传' : ''"
+              :disabled="loading || !!savingKey"
+              @update:value="(value) => (drafts[spec.key] = value)"
+            />
+            <NSelect
+              v-else-if="spec.options.length"
+              :value="String(drafts[spec.key] ?? '')"
+              :options="stringOptions(spec)"
+              :disabled="loading || !!savingKey"
+              @update:value="(value) => (drafts[spec.key] = value)"
+            />
+            <NInput
+              v-else-if="TEXTAREA_KEYS.has(spec.key) || spec.type === 'json'"
+              :value="String(drafts[spec.key] ?? '')"
+              type="textarea"
+              :autosize="{ minRows: 3, maxRows: 12 }"
+              :placeholder="spec.default === null || spec.default === undefined ? '' : String(spec.default)"
+              :disabled="loading || !!savingKey"
+              @update:value="(value) => (drafts[spec.key] = value)"
+            />
+            <NInput
+              v-else
+              :value="String(drafts[spec.key] ?? '')"
+              :type="spec.secret ? 'password' : 'text'"
+              :show-password-on="spec.secret ? 'click' : undefined"
+              :placeholder="spec.secret ? '已设置则留空，输入新值可覆盖' : String(spec.default ?? '')"
+              :disabled="loading || !!savingKey"
+              @update:value="(value) => (drafts[spec.key] = value)"
+            />
+          </div>
+
+          <div class="field-actions">
+            <NButton
+              size="small"
+              type="primary"
+              :disabled="!isDirty(spec) || !!savingKey"
+              :loading="savingKey === spec.key"
+              @click="saveField(spec)"
+            >
+              <template #icon><Save :size="14" /></template>
+              保存
+            </NButton>
+            <NButton size="small" :disabled="!!savingKey" @click="resetField(spec)">
+              默认
+            </NButton>
+          </div>
         </div>
       </div>
-
-      <div class="prefix-row">
-        <NInput
-          v-model:value="prefix"
-          class="prefix-input"
-          maxlength="3"
-          show-count
-          placeholder="."
-          :disabled="loading || saving"
-        />
-        <NButton type="primary" :disabled="!canSave || loading" :loading="saving" @click="savePrefix">
-          <template #icon><Save :size="16" /></template>
-          保存
-        </NButton>
-        <NButton :disabled="loading || saving" @click="resetPrefix">
-          <template #icon><RotateCcw :size="16" /></template>
-          恢复默认
-        </NButton>
-      </div>
-
-      <p class="preview">
-        预览：<code>{{ prefix.trim() || '.' }}help</code> · <code>{{ prefix.trim() || '.' }}bot</code>
-      </p>
-      <p class="card-hint">支持 1–3 个字符，不能包含空格；中文句号「。」也会被自动识别为命令。</p>
-    </section>
-
-    <section class="glass-panel-heavy settings-card">
-      <div class="card-heading">
-        <div>
-          <h2>触发正则</h2>
-          <p class="card-hint">
-            群聊消息只要匹配任意一条正则就会触发回复，不依赖 @ 或概率；私聊始终回复，不受影响。每行一条，最多 50 条。
-          </p>
-        </div>
-      </div>
-
-      <NInput
-        v-model:value="regexText"
-        type="textarea"
-        :autosize="{ minRows: 6, maxRows: 14 }"
-        placeholder="例如：&#10;^小助手&#10;帮我看看&#10;有(人|谁)在吗"
-        :disabled="loading || saving"
-      />
-
-      <div class="prefix-row">
-        <NButton type="primary" :disabled="!canSaveRegex || loading" :loading="saving" @click="saveRegexes">
-          <template #icon><Save :size="16" /></template>
-          保存
-        </NButton>
-        <NButton :disabled="loading || saving" @click="resetRegexes">
-          <template #icon><RotateCcw :size="16" /></template>
-          恢复默认
-        </NButton>
-        <span class="regex-count">{{ regexLines.length }} 条</span>
-      </div>
-
-      <p class="card-hint">
-        使用 Python 正则语法，<code>search</code> 语义（无需匹配整句）。非法正则会被拒绝；保存后即时生效。
-        也可以在聊天里用 <code>{{ prefix.trim() || '.' }}trigger regex add &lt;正则&gt;</code> 管理。
-      </p>
     </section>
   </div>
 </template>
@@ -202,50 +272,81 @@ onMounted(loadSettings)
 }
 
 .settings-card {
-  padding: 24px;
+  padding: 22px 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .card-heading h2 {
-  margin: 0 0 6px;
-  font-size: 18px;
-}
-
-.card-hint {
   margin: 0;
-  color: var(--text-color-3, #8a86a0);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 17px;
 }
 
-.prefix-row {
+.field-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.1fr) minmax(240px, 1.6fr) auto;
+  gap: 14px;
+  align-items: start;
+  padding: 12px 0;
+  border-top: 1px solid rgba(140, 130, 200, 0.12);
+}
+
+.field-row:first-child {
+  border-top: none;
+}
+
+.field-label {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
 }
 
-.prefix-input {
-  max-width: 140px;
-}
-
-.preview {
-  margin: 0;
-  font-size: 13px;
-  color: var(--text-color-2, #5c5870);
-}
-
-.regex-count {
-  font-size: 12px;
+.field-key {
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
   color: var(--text-color-3, #8a86a0);
 }
 
-code {
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: rgba(120, 110, 200, 0.12);
-  font-size: 0.92em;
+.field-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-color-3, #8a86a0);
+}
+
+.field-control {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.field-control > * {
+  width: 100%;
+}
+
+.number-input {
+  max-width: 220px;
+}
+
+.field-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .field-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
 }
 </style>

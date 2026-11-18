@@ -3,8 +3,7 @@
 import asyncpg
 from aiohttp import web
 
-from sophos import prompts
-from sophos.config import settings
+from sophos import prompts, runtime_config
 from sophos.identity_prompt import build_prompt_values
 
 routes = web.RouteTableDef()
@@ -140,7 +139,7 @@ async def preview_prompt(request: web.Request) -> web.Response:
     if conversation_id is not None:
         values = await _conversation_values(request.app["pool"], int(conversation_id))
     else:
-        values = {"nickname": settings.bot_nickname or "Sophos"}
+        values = {"nickname": str(runtime_config.get("bot_nickname") or "Sophos")}
     try:
         prompts.validate(spec.key, content)
         rendered = prompts.render_content(spec.key, content, values, mark_missing=True)

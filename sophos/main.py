@@ -33,6 +33,23 @@ logger = logging.getLogger("sophos")
 _ingest = Pipeline(INGEST_STAGES)
 _response = Pipeline(RESPONSE_STAGES)
 
+_LOG_FMT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+
+
+class _TzFormatter(logging.Formatter):
+    """用配置时区替代本地时间的 Formatter。"""
+
+    def __init__(self, fmt: str, tz: ZoneInfo) -> None:
+        super().__init__(fmt)
+        self._tz = tz
+
+    @override
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        dt = datetime.fromtimestamp(record.created, tz=self._tz)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime("%Y-%m-%d %H:%M:%S") + f",{int(record.msecs):03d}"
+
 
 def _log_preview(text: str, limit: int = 200) -> str:
     """Collapse a message body into one log-friendly line."""
@@ -96,6 +113,7 @@ async def start() -> None:
 
     # 初始化运行时配置
     await runtime_config.init(pool)
+    _configure_file_logging()
     await prompts.init(pool)
     await permission.init(pool)
 
@@ -187,42 +205,10 @@ def main() -> None:
     logging.addLevelName(trace_level, "TRACE")
 
     # 控制台：INFO 级别，人类可读
-    # 文件：  TRACE 级别，包含完整 LLM 请求/响应
-    log_fmt = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-
-    class _TzFormatter(logging.Formatter):
-        """用配置时区替代本地时间的 Formatter。"""
-
-        _tz = ZoneInfo(settings.timezone)
-
-        @override
-        def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
-            dt = datetime.fromtimestamp(record.created, tz=self._tz)
-            if datefmt:
-                return dt.strftime(datefmt)
-            return dt.strftime("%Y-%m-%d %H:%M:%S") + f",{int(record.msecs):03d}"
-
+    # 文件：  TRACE 级别，包含完整 LLM 请求/响应（等 runtime_config 加载后再建）
     root_logger = logging.getLogger()
     root_logger.setLevel(trace_level)
-
-    # 控制台 handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(_TzFormatter(log_fmt))
-    root_logger.addHandler(console_handler)
-
-    # 文件 handler
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    file_handler = RotatingFileHandler(
-        log_dir / "sophos.log",
-        maxBytes=settings.log_max_bytes,
-        backupCount=settings.log_backup_count,
-        encoding="utf-8",
-    )
-    file_handler.setLevel(trace_level)
-    file_handler.setFormatter(_TzFormatter(log_fmt))
-    root_logger.addHandler(file_handler)
+    root_logger.addHandler(_console_handler())
 
     # 压制 aiohttp access log（每个 HTTP 请求都输出 INFO，WebUI 连上就刷屏）
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
@@ -231,6 +217,38 @@ def main() -> None:
         asyncio.run(start())
     except KeyboardInterrupt:
         logger.info("Shutting down.")
+
+
+def _log_timezone() -> ZoneInfo:
+    return ZoneInfo(str(runtime_config.get("timezone") or settings.timezone))
+
+
+def _console_handler() -> logging.Handler:
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(_TzFormatter(_LOG_FMT, _log_timezone()))
+    return handler
+
+
+def _configure_file_logging() -> None:
+    """按 runtime_config 里的值建立/重建文件 handler（启动时调用一次）。"""
+    root_logger = logging.getLogger()
+    for handler in [h for h in root_logger.handlers if isinstance(h, RotatingFileHandler)]:
+        root_logger.removeHandler(handler)
+        handler.close()
+    for handler in root_logger.handlers:
+        handler.setFormatter(_TzFormatter(_LOG_FMT, _log_timezone()))
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    file_handler = RotatingFileHandler(
+        log_dir / "sophos.log",
+        maxBytes=int(runtime_config.get("log_max_bytes") or settings.log_max_bytes),
+        backupCount=int(runtime_config.get("log_backup_count") or settings.log_backup_count),
+        encoding="utf-8",
+    )
+    file_handler.setLevel(5)
+    file_handler.setFormatter(_TzFormatter(_LOG_FMT, _log_timezone()))
+    root_logger.addHandler(file_handler)
 
 
 if __name__ == "__main__":

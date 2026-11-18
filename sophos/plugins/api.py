@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from sophos import runtime_config
 from sophos.config import settings
 from sophos.platform import SendMessageRequest
 from sophos.toolkit.base import FunctionTool, Tool, ToolHandler
@@ -79,7 +80,7 @@ class PluginRuntime:
             "pool": self.pool,
             "provider_mgr": self.provider_mgr,
             "adapter_capabilities": self.adapter_capabilities(),
-            "timezone": settings.timezone,
+            "timezone": str(runtime_config.get("timezone") or settings.timezone),
         }
         if self.message_service is not None:
             context["platform_store"] = self.message_service.platform_store

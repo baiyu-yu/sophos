@@ -19,7 +19,6 @@ import aiohttp
 import asyncpg
 
 from sophos import observability, prompts, runtime_config
-from sophos.config import settings
 from sophos.llm.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -52,6 +51,14 @@ async def fetch_image(url: str, session: aiohttp.ClientSession) -> tuple[bytes, 
 # ── 感知哈希 ──────────────────────────────────────────────
 
 
+def _config_float(key: str, fallback: float) -> float:
+    value = runtime_config.get(key)
+    try:
+        return fallback if value is None else float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 async def compute_hash(image_data: bytes) -> str | None:
     """计算感知哈希（CPU 密集，在 executor 中运行）。"""
     loop = asyncio.get_running_loop()
@@ -61,8 +68,9 @@ async def compute_hash(image_data: bytes) -> str | None:
             import imagehash
             from PIL import Image
 
+            hash_size = int(runtime_config.get("vision_hash_size") or 15)
             img = Image.open(io.BytesIO(image_data))
-            return str(imagehash.average_hash(img, hash_size=settings.vision_hash_size))
+            return str(imagehash.average_hash(img, hash_size=hash_size))
 
         return await loop.run_in_executor(None, _hash)
     except Exception:
@@ -131,10 +139,10 @@ def should_explore(entry: dict[str, Any]) -> bool:
     if not entry.get("description"):
         return True  # 无描述，必须探索
     hit_count = entry.get("hit_count", 0)
-    epsilon = max(
-        settings.vision_epsilon_min,
-        settings.vision_epsilon_init * (settings.vision_epsilon_decay**hit_count),
-    )
+    epsilon_init = _config_float("vision_epsilon_init", 1.0)
+    epsilon_min = _config_float("vision_epsilon_min", 0.0)
+    epsilon_decay = _config_float("vision_epsilon_decay", 0.7)
+    epsilon = max(epsilon_min, epsilon_init * (epsilon_decay**hit_count))
     return random.random() < epsilon
 
 

@@ -6,10 +6,15 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
+from sophos import runtime_config
 from sophos.agent.runs import get_run_tracker
 from sophos.config import settings
 
 routes = web.RouteTableDef()
+
+
+def _timezone() -> str:
+    return str(runtime_config.get("timezone") or settings.timezone)
 
 _FILTER = "created_at >= $1 AND created_at < $2 AND ($3::bigint IS NULL OR conversation_id = $3)"
 _MESSAGE_FILTER = "occurred_at >= $1 AND occurred_at < $2 AND ($3::bigint IS NULL OR conversation_id = $3)"
@@ -45,7 +50,7 @@ def parse_window(query, *, now: datetime | None = None) -> tuple[datetime, datet
             raise ValueError
     except ValueError:
         raise web.HTTPBadRequest(reason="conversation_id must be a positive integer") from None
-    now = (now or datetime.now(UTC)).astimezone(ZoneInfo(settings.timezone))
+    now = (now or datetime.now(UTC)).astimezone(ZoneInfo(_timezone()))
     days = {"today": 1, "week": 7, "month": 30}[range_key]
     start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
     return start, now, conversation_id, range_key
@@ -69,7 +74,7 @@ async def stats(request: web.Request) -> web.Response:
     args = (start, end, conversation_id)
     pool = request.app["pool"]
     bucket = "hour" if range_key == "today" else "day"
-    tz = settings.timezone
+    tz = _timezone()
 
     async def fetch(sql, *params):
         return await pool.fetch(sql, *params)

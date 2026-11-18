@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sophos import prompts, runtime_config
-from sophos.config import settings
 from sophos.llm.context import format_image_descriptions, get_display_name
 from sophos.message_store import MessageStore
 
@@ -39,7 +38,7 @@ class TriggerContext:
 
 
 def bot_name() -> str:
-    return settings.bot_nickname or "Sophos"
+    return str(runtime_config.get("bot_nickname") or "Sophos")
 
 
 def _has_image(row: dict[str, Any]) -> bool:

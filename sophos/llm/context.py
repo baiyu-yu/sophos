@@ -149,7 +149,7 @@ def _build_flat(
 ) -> list[Message]:
     """拍平模式：所有消息合并为单条 user message。"""
     lines: list[str] = []
-    bot_name = settings.bot_nickname or "Sophos"
+    bot_name = str(runtime_config.get("bot_nickname") or "Sophos")
 
     for row in rows:
         img_text = format_image_descriptions(row)
@@ -242,7 +242,7 @@ def format_timestamp(row: dict[str, Any]) -> str:
     ts = row.get("timestamp")
     if ts is None:
         return "????-??-?? ??:??"
-    local_time = ts.astimezone(ZoneInfo(settings.timezone))
+    local_time = ts.astimezone(ZoneInfo(str(runtime_config.get("timezone") or settings.timezone)))
     return local_time.strftime("%Y-%m-%d %H:%M")
 
 
@@ -359,7 +359,7 @@ def format_new_messages(
     if not rows:
         return None
 
-    bot_name = settings.bot_nickname or "Sophos"
+    bot_name = str(runtime_config.get("bot_nickname") or "Sophos")
     lines: list[str] = []
 
     for row in rows:

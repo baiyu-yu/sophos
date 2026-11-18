@@ -14,6 +14,7 @@ from typing import Any
 import aiohttp
 import asyncpg
 
+from sophos import runtime_config
 from sophos.adapter_router import AdapterRouter
 from sophos.config import settings
 from sophos.onebot_adapter import OneBot11Adapter
@@ -476,8 +477,8 @@ class OneBotConnectionManager:
             self_id = str(info.get("user_id") or "")
             nickname = str(info.get("nickname") or "")
         if not self_id:
-            self_id = str(settings.bot_id or f"connection-{record.id}")
-            nickname = settings.bot_nickname
+            self_id = str(runtime_config.get("bot_id") or f"connection-{record.id}")
+            nickname = str(runtime_config.get("bot_nickname") or "")
         adapter = await OneBot11Adapter.create(
             api=api,
             platform_store=self._platform_store,

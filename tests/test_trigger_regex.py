@@ -3,10 +3,7 @@
 import re
 import unittest
 
-from aiohttp import web
-
-from sophos import trigger
-from sophos.api.routes import settings as settings_routes
+from sophos import runtime_config, trigger
 
 
 class TriggerRegexTests(unittest.TestCase):
@@ -33,24 +30,24 @@ class TriggerRegexTests(unittest.TestCase):
 
 class TriggerRegexValidationTests(unittest.TestCase):
     def test_accepts_list_and_strips_blank_lines(self) -> None:
-        value = settings_routes._validate_trigger_regexes(["  ^有  ", "", "   ", "吗$"])
+        value = runtime_config.validate_value("trigger_regexes", ["  ^有  ", "", "   ", "吗$"])
         self.assertEqual(value, ["^有", "吗$"])
 
     def test_rejects_non_list(self) -> None:
-        with self.assertRaises(web.HTTPBadRequest):
-            settings_routes._validate_trigger_regexes("^有")
+        with self.assertRaises(ValueError):
+            runtime_config.validate_value("trigger_regexes", "^有")
 
     def test_rejects_invalid_pattern(self) -> None:
-        with self.assertRaises(web.HTTPBadRequest):
-            settings_routes._validate_trigger_regexes(["("])
+        with self.assertRaises(ValueError):
+            runtime_config.validate_value("trigger_regexes", ["("])
 
     def test_rejects_too_many_patterns(self) -> None:
-        with self.assertRaises(web.HTTPBadRequest):
-            settings_routes._validate_trigger_regexes([f"p{i}" for i in range(51)])
+        with self.assertRaises(ValueError):
+            runtime_config.validate_value("trigger_regexes", [f"p{i}" for i in range(51)])
 
     def test_rejects_overlong_pattern(self) -> None:
-        with self.assertRaises(web.HTTPBadRequest):
-            settings_routes._validate_trigger_regexes(["x" * 201])
+        with self.assertRaises(ValueError):
+            runtime_config.validate_value("trigger_regexes", ["x" * 201])
 
 
 if __name__ == "__main__":

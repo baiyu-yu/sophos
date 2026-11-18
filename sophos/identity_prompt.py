@@ -71,15 +71,17 @@ async def build_prompt_values(
         conversation_kind=conversation_kind,
     )
     fmt_desc = describe_schema(runtime_config.get("llm_user_schema"))
-    now_str = datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M")
+    timezone = str(runtime_config.get("timezone") or settings.timezone)
+    nickname = str(runtime_config.get("bot_nickname") or "Sophos")
+    now_str = datetime.now(ZoneInfo(timezone)).strftime("%Y-%m-%d %H:%M")
     values.update(
         {
-            "nickname": settings.bot_nickname or "Sophos",
+            "nickname": nickname,
             "current_time": now_str,
-            "timezone": settings.timezone,
+            "timezone": timezone,
             "message_format": fmt_desc,
             "runtime_context": (
-                f"当前时间：{now_str} ({settings.timezone})\n{values['identity_context']}\n消息格式：{fmt_desc}"
+                f"当前时间：{now_str} ({timezone})\n{values['identity_context']}\n消息格式：{fmt_desc}"
             ),
         }
     )

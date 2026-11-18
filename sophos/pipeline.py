@@ -394,7 +394,7 @@ async def _handle_llm_trigger(ctx: PipelineContext) -> None:
     registry = _get_registry()
     await _load_tool_disabled_state(registry)
 
-    nickname = settings.bot_nickname or "Sophos"
+    nickname = str(runtime_config.get("bot_nickname") or "Sophos")
     prompt_values = await build_prompt_values(
         get_pool(),
         current_user_id=ctx.user_id,
@@ -570,7 +570,7 @@ async def _handle_llm_trigger(ctx: PipelineContext) -> None:
         "conversation_kind": ctx.message.conversation.kind.value,
         "account_id": ctx.message.account_id,
         "adapter_capabilities": {capability.value for capability in ctx.adapter.capabilities},
-        "timezone": settings.timezone,
+        "timezone": runtime_config.get("timezone") or settings.timezone,
         "user_id": ctx.user_id,
         "provider_mgr": ctx.provider_mgr,
         "pool": get_pool(),
