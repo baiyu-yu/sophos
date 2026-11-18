@@ -52,6 +52,23 @@ class RuntimeConfigValidationTests(unittest.TestCase):
         self.assertIsNone(runtime_config.validate_value("llm_temperature", None))
         self.assertEqual(runtime_config.validate_value("llm_temperature", 0.3), 0.3)
 
+    def test_truncated_schema_falls_back_to_builtin_default(self) -> None:
+        for key in ("llm_user_schema", "llm_bot_schema"):
+            self.assertIn("{{message}}", runtime_config.get_defaults()[key])
+        with patch.dict(runtime_config._cache, {"llm_user_schema": "[{{time}}]"}, clear=False):
+            self.assertEqual(runtime_config.get("llm_user_schema"), runtime_config.DEFAULT_USER_SCHEMA)
+            self.assertEqual(runtime_config.get_all()["llm_user_schema"], runtime_config.DEFAULT_USER_SCHEMA)
+        with patch.dict(runtime_config._cache, {"llm_bot_schema": "[{{time}}]"}, clear=False):
+            self.assertEqual(runtime_config.get("llm_bot_schema"), runtime_config.DEFAULT_BOT_SCHEMA)
+
+    def test_default_schema_uses_env_value_when_valid(self) -> None:
+        custom = "[{{time}}] {{name}}: {{message}}"
+        self.assertEqual(runtime_config._default_schema("llm_user_schema", custom), custom)
+        self.assertEqual(
+            runtime_config._default_schema("llm_user_schema", "[{{time}}]"),
+            runtime_config.DEFAULT_USER_SCHEMA,
+        )
+
     def test_unknown_key_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             runtime_config.validate_value("no_such_key", 1)

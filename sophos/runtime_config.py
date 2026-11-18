@@ -242,6 +242,38 @@ _SPECS: dict[str, ConfigSpec] = {
     )
 }
 
+DEFAULT_USER_SCHEMA = "[{{time}}] #{{mid}} {{name}}({{uid}})：{{message}}"
+DEFAULT_BOT_SCHEMA = "[{{time}}] #{{mid}} {{name}}：{{message}}"
+
+_SCHEMA_DEFAULTS: dict[str, str] = {
+    "llm_user_schema": DEFAULT_USER_SCHEMA,
+    "llm_bot_schema": DEFAULT_BOT_SCHEMA,
+}
+
+
+def _coerce_schema(key: str, value: Any) -> Any:
+    """模板缺少 {{message}}（常见于 .env 被行内 # 注释截断）时回退到内置默认。"""
+    if key not in _SCHEMA_DEFAULTS:
+        return value
+    if isinstance(value, str) and "{{message}}" in value:
+        return value
+    return _SCHEMA_DEFAULTS[key]
+
+
+def _default_schema(key: str, configured: Any) -> str:
+    fallback = _SCHEMA_DEFAULTS[key]
+    if isinstance(configured, str) and "{{message}}" in configured:
+        return configured
+    if isinstance(configured, str) and configured.strip():
+        logger.warning(
+            "配置 %s 的 .env 默认值 %r 缺少 {{message}}（疑似被行内 # 注释截断），"
+            "已改用内置默认值；请在 WebUI「设置」中修正，或给 .env 里的值加引号",
+            key,
+            configured,
+        )
+    return fallback
+
+
 _DEFAULTS: dict[str, Any] = {
     "bot_id": settings.bot_id,
     "bot_nickname": settings.bot_nickname,
@@ -272,8 +304,8 @@ _DEFAULTS: dict[str, Any] = {
     "llm_max_tokens": settings.llm_max_tokens,
     "llm_max_tool_rounds": settings.llm_max_tool_rounds,
     "llm_flatten_context": settings.llm_flatten_context,
-    "llm_user_schema": settings.llm_user_schema,
-    "llm_bot_schema": settings.llm_bot_schema,
+    "llm_user_schema": _default_schema("llm_user_schema", settings.llm_user_schema),
+    "llm_bot_schema": _default_schema("llm_bot_schema", settings.llm_bot_schema),
     "vision_context_messages": 5,
     "vision_max_tokens": 1024,
     "vision_defer_seconds": 30.0,
@@ -452,13 +484,18 @@ async def init(pool: asyncpg.Pool) -> None:
     rows = await pool.fetch("SELECT key, value FROM bot_config")
     for row in rows:
         _cache[row["key"]] = json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+    # 旧版本可能把被截断的模板写进了数据库，这里静默回退到内置默认值
+    for key in _SCHEMA_DEFAULTS:
+        if key in _cache and _coerce_schema(key, _cache[key]) != _cache[key]:
+            logger.warning("数据库中的 %s=%r 缺少 {{message}}，已回退内置默认模板", key, _cache[key])
+            _cache.pop(key)
     logger.info("RuntimeConfig loaded %d keys from DB", len(_cache))
 
 
 def get(key: str, default: Any = None) -> Any:
     """读取配置值。优先缓存 → _DEFAULTS → default。"""
     if key in _cache:
-        return _cache[key]
+        return _coerce_schema(key, _cache[key])
     if key in _DEFAULTS:
         return _DEFAULTS[key]
     return default
@@ -497,6 +534,8 @@ def get_all() -> dict[str, Any]:
     """返回所有可调配置的当前值（合并 defaults + cache）。"""
     merged = dict(_DEFAULTS)
     merged.update(_cache)
+    for key in _SCHEMA_DEFAULTS:
+        merged[key] = _coerce_schema(key, merged[key])
     return merged
 
 
