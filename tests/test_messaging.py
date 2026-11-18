@@ -101,6 +101,39 @@ class MessageStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("external_message_id", pool.execute.await_args.args[0])
         self.assertEqual(pool.execute.await_args.args[1:], (88, "expanded"))
 
+    async def test_clear_context_filters_assistant_and_conversation(self) -> None:
+        pool = AsyncMock()
+        pool.execute.return_value = "DELETE 4"
+        store = MessageStore(pool)
+
+        cleared = await store.clear_context(conversation_id=20, target="assistant")
+
+        self.assertEqual(cleared, 4)
+        query, *args = pool.execute.await_args.args
+        self.assertIn("DELETE FROM messages", query)
+        self.assertIn("conversation_id = $1", query)
+        self.assertIn("source = 'sophos'", query)
+        self.assertEqual(args, [20])
+
+    async def test_clear_context_user_scope_across_all_conversations(self) -> None:
+        pool = AsyncMock()
+        pool.execute.return_value = "DELETE 7"
+        store = MessageStore(pool)
+
+        cleared = await store.clear_context(conversation_id=None, target="user")
+
+        self.assertEqual(cleared, 7)
+        query, *args = pool.execute.await_args.args
+        self.assertNotIn("conversation_id =", query)
+        self.assertIn("source <> 'sophos'", query)
+        self.assertEqual(args, [])
+
+    async def test_clear_context_rejects_unknown_target(self) -> None:
+        store = MessageStore(AsyncMock())
+
+        with self.assertRaisesRegex(ValueError, "unknown clear target"):
+            await store.clear_context(target="bot")
+
 
 class _FakeAdapter:
     capabilities = frozenset(
@@ -207,6 +240,23 @@ class MessageServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([segment["type"] for segment in first], ["reply", "text"])
         self.assertEqual([segment["type"] for segment in second], ["text"])
         self.assertIsNone(store.save_outbound_message.await_args_list[1].kwargs["reply_to_message_id"])
+
+    async def test_literal_backslash_f_is_split_into_bubbles(self) -> None:
+        """模型有时输出字面量反斜杠 + f，而不是真正的换页符。"""
+        store = AsyncMock()
+        store.save_outbound_message.side_effect = [11, 12]
+        platform_store = AsyncMock()
+        platform_store.get_conversation.return_value = _conversation()
+        router = AdapterRouter()
+        adapter = _FakeAdapter()
+        router.register(adapter)
+        service = MessageService(store, platform_store, router)
+
+        await service.send_message(SendMessageRequest(conversation_id=20, text="第一\\f第二"))
+
+        self.assertEqual(adapter.send_message.await_count, 2)
+        texts = [call.args[0].segments[0]["data"]["text"] for call in adapter.send_message.await_args_list]
+        self.assertEqual(texts, ["第一", "第二"])
 
     async def test_reply_must_belong_to_current_delivery_scope(self) -> None:
         store = AsyncMock()

@@ -31,6 +31,7 @@ from sophos.agent.workflow import NodeSpec
 from sophos.commands import (
     CommandContext,
     handle_bot_command,
+    handle_clear_command,
     handle_config_command,
     handle_help_command,
     handle_llm_command,
@@ -830,8 +831,12 @@ class CheckScopeStage(Stage):
             await next_stage()
             return
 
-        # 会话禁用 — 仅放行 .bot 命令
+        # 会话禁用 — 放行 .bot 命令与 .clear（清理上下文不应被开关挡住）
         cmd_text = _strip_at_prefix(ctx)
+        if cmd_text.startswith(".clear"):
+            ctx.state["_cmd_text"] = cmd_text
+            await next_stage()
+            return
         if not cmd_text.startswith(".bot"):
             return  # 静默丢弃
 
@@ -884,6 +889,7 @@ class HandleCommandStage(Stage):
     """处理 dot 命令（权限检查 + 分发）。"""
 
     _COMMAND_PERMS: dict[str, str] = {
+        ".clear": "cmd.config",
         ".tools": "cmd.tools",
         ".llm": "cmd.llm",
         ".trigger": "cmd.trigger",
@@ -1008,6 +1014,15 @@ class HandleCommandStage(Stage):
                 text,
                 context=command_context,
                 pool=pool,
+                scope_type=scope_type,
+                scope_id=scope_id,
+            )
+        elif prefix == ".clear":
+            await handle_clear_command(
+                text,
+                context=command_context,
+                pool=pool,
+                user_id=ctx.user_id,
                 scope_type=scope_type,
                 scope_id=scope_id,
             )

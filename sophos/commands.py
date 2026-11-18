@@ -1021,84 +1021,18 @@ async def _resolve_targets(
 # ── .help ─────────────────────────────────────────────────
 
 # 每条管理命令的详细用法（与对应 handler 的 usage 保持一致）。
-_COMMAND_DETAILS: dict[str, tuple[str, str]] = {
-    "ping": ("cmd-free", "连通测试，不经过 LLM，用来确认收发链路正常。"),
-    "help": ("cmd-free", "显示命令总览。用法：.help / .help <命令>"),
-    "bot": (
-        "cmd-free",
-        "本会话开关。用法：\n  .bot / .bot on / .bot off\n"
-        "开启需要 bot、bot.shared（群）或 bot.direct（私聊）权限。",
-    ),
-    "llm": (
-        "cmd.llm",
-        "模型服务商与 slot 管理：\n"
-        "  .llm                       — 当前默认模型\n"
-        "  .llm list                  — 列出服务商\n"
-        "  .llm add <alias> <url> <key> [--gemini <url>] [--anthropic <url>]\n"
-        "  .llm remove <alias>\n"
-        "  .llm url <alias> [<type> <url|clear>]\n"
-        "  .llm models <alias>        — 刷新并列出可用模型\n"
-        "  .llm switch <alias>/<model> [--type openai|gemini|anthropic]\n"
-        "  .llm extra_body [json|clear]\n"
-        "  .llm timeout [秒]\n"
-        "  .llm collector|vision|trigger|image — 各 slot 的模型管理",
-    ),
-    "trigger": (
-        "cmd.trigger",
-        "触发器配置：\n"
-        "  .trigger                   — 当前配置\n"
-        "  .trigger rate <0~1>        — 群聊普通消息的基础回复概率\n"
-        "  .trigger at <on|off>       — 是否 @ 机器人必回\n"
-        "  .trigger regex …           — 触发正则：list/add/remove/clear\n"
-        "  .trigger add <词> <boost>  — 添加关键词加权\n"
-        "  .trigger remove <词>\n"
-        "  .trigger mute <用户ID> [备注] / .trigger unmute <用户ID>\n"
-        "  .trigger policy ...        — 用户级触发策略",
-    ),
-    "tools": (
-        "cmd.tools",
-        "本会话工具白名单：\n"
-        "  .tools add <t1,t2>   — 添加工具\n"
-        "  .tools remove <t1,t2>\n"
-        "  .tools reset         — 重置为全部可用\n"
-        "  .tools list-all      — 列出所有工具（含插件工具）",
-    ),
-    "memory": (
-        "cmd.memory",
-        "记忆系统：\n"
-        "  .memory                       — 记忆统计与嵌入模型\n"
-        "  .memory model switch <alias>/<model>\n"
-        "  .memory endpoint [path]\n"
-        "  .memory extra_body [json|clear]\n"
-        "  .memory migrate [status|rollback]",
-    ),
-    "config": (
-        "cmd.config",
-        "运行时配置：\n"
-        "  .config               — 列出全部配置\n"
-        "  .config <key>         — 查看某项\n"
-        "  .config <key> <value> — 修改\n"
-        "  .config reset <key>   — 恢复默认\n"
-        "常用：command_prefix、trigger_delay、llm_temperature、reply_max_length",
-    ),
-    "prompt": (
-        "cmd.prompt",
-        "系统提示词：\n"
-        "  .prompt       — 查看（截断 500 字）\n"
-        "  .prompt full  — 完整显示\n"
-        "编辑与版本历史请用 WebUI 的「Prompt」页",
-    ),
-    "perm": (
-        "delegate",
-        "权限管理：\n"
-        "  .perm                       — 权限概览\n"
-        "  .perm grant <权限> <目标>    — 授权\n"
-        "  .perm revoke <权限> <目标>   — 撤销\n"
-        "  .perm list [用户ID]          — 列出\n"
-        "权限：bot, bot.shared, bot.direct, cmd.tools, cmd.config, cmd.llm,\n"
-        "      cmd.trigger, cmd.memory, cmd.prompt, delegate\n"
-        "目标：用户ID | ID1,ID2 | admins | all",
-    ),
+_COMMANDS: dict[str, tuple[str, str, str]] = {
+    "ping": ("cmd-free", "连通测试", ""),
+    "help": ("cmd-free", "查看命令列表", "[命令]"),
+    "bot": ("cmd-free", "本会话开关", "[on|off]"),
+    "clear": ("cmd.config", "清空上下文（当前会话；加 global 清理全部会话）", "assistant|user|all [global]"),
+    "llm": ("cmd.llm", "模型服务商与 slot", "list|add|remove|url|models|switch|timeout|collector|…"),
+    "trigger": ("cmd.trigger", "触发规则", "rate|at|regex|add|remove|mute|policy"),
+    "tools": ("cmd.tools", "本会话工具白名单", "add|remove|reset|list-all"),
+    "memory": ("cmd.memory", "记忆与嵌入模型", "model|endpoint|extra_body|migrate"),
+    "config": ("cmd.config", "运行时配置", "[<key> [<value>]] | reset <key>"),
+    "prompt": ("cmd.prompt", "系统提示词", "[full]"),
+    "perm": ("delegate", "权限管理", "grant|revoke|list"),
 }
 
 
@@ -1111,10 +1045,10 @@ async def _can_use_command(
     scope_id: int,
 ) -> bool:
     """判断用户能否使用某条管理命令。"""
-    entry = _COMMAND_DETAILS.get(name)
+    entry = _COMMANDS.get(name)
     if entry is None:
         return False
-    perm, _ = entry
+    perm = entry[0]
     if perm == "cmd-free":
         return True
     if permission.is_master(user_id):
@@ -1131,7 +1065,7 @@ async def handle_help_command(
     scope_type: str,
     scope_id: int,
 ) -> bool:
-    """处理 .help 命令。根据用户权限动态显示可用命令，支持 .help <命令>。"""
+    """处理 .help 命令：命令列表只显示命令与一句话介绍。"""
     prefix = str(runtime_config.get("command_prefix") or ".")
     parts = text.split()
     topic = parts[1].strip().lower() if len(parts) > 1 else ""
@@ -1139,56 +1073,26 @@ async def handle_help_command(
         topic = topic[1:]
 
     if topic:
-        detail = _COMMAND_DETAILS.get(topic)
-        if detail is None:
-            known = " / ".join(sorted(_COMMAND_DETAILS))
-            await _reply(context, f"未知命令: {topic}\n可用主题: {known}")
+        entry = _COMMANDS.get(topic)
+        if entry is None:
+            known = " / ".join(f"{prefix}{name}" for name in _COMMANDS)
+            await _reply(context, f"未知命令: {topic}\n可用命令: {known}")
             return True
         if not await _can_use_command(topic, pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
-            await _reply(context, "权限不足，无法查看该命令的详细用法")
+            await _reply(context, "权限不足")
             return True
-        await _reply(context, detail[1])
+        perm, intro, usage = entry
+        lines = [f"{prefix}{topic} — {intro}"]
+        if usage:
+            lines.append(f"用法: {prefix}{topic} {usage}")
+        await _reply(context, "\n".join(lines))
         return True
 
-    lines = [
-        f"可用命令（前缀 {prefix}；.help <命令> 查看详细用法）",
-        "",
-        "基础",
-        "  .ping               连通测试",
-        "  .help [命令]        帮助总览 / 子命令说明",
-        "  .bot [on|off]       本会话开关（.bot 查看状态）",
-    ]
-
-    admin_lines: list[str] = []
-    if await _can_use_command("llm", pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
-        admin_lines += [
-            "  .llm …              模型：list/add/remove/url/models/switch/timeout",
-            "                      collector/vision/trigger/image 子 slot",
-        ]
-    if await _can_use_command("trigger", pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
-        admin_lines.append("  .trigger …          触发：rate/at/add/remove/mute/unmute/policy")
-    if await _can_use_command("tools", pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
-        admin_lines.append("  .tools …            工具白名单：add/remove/reset/list-all")
-    if await _can_use_command("memory", pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
-        admin_lines.append("  .memory …           记忆：model/endpoint/extra_body/migrate")
-    if await _can_use_command("config", pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
-        admin_lines.append("  .config …           运行时配置：<key> / <key> <value> / reset")
-    if await _can_use_command("prompt", pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
-        admin_lines.append("  .prompt …           系统提示词：.prompt / .prompt full")
-    if await _can_use_command("perm", pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
-        admin_lines.append("  .perm …             权限：grant/revoke/list")
-
-    if admin_lines:
-        lines += ["", "管理", *admin_lines]
-
-    lines += [
-        "",
-        "提示",
-        "  · 私聊消息必回；群聊默认 @机器人 必回，普通消息按概率触发",
-        "    （.trigger at off / .trigger rate 可调）",
-        "  · 前缀可在 WebUI「设置」页修改；模型、Prompt、插件、协议端均在 WebUI 管理",
-        "  · Master（最高权限）在 WebUI「权限管理 → 最高权限」设置，失败告警会私信 Master",
-    ]
+    lines = [f"可用命令（前缀 {prefix}）", ""]
+    for name, (_perm, intro, _usage) in _COMMANDS.items():
+        if await _can_use_command(name, pool=pool, user_id=user_id, scope_type=scope_type, scope_id=scope_id):
+            lines.append(f"  {prefix}{name:<8} {intro}")
+    lines += ["", "提示：私聊必回；群聊 @机器人 或命中触发词/正则才回复"]
     await _reply(context, "\n".join(lines))
     return True
 
@@ -1516,6 +1420,46 @@ async def handle_perm_command(
         )
 
     await _reply(context, reply)
+    return True
+
+
+async def handle_clear_command(
+    text: str,
+    *,
+    context: CommandContext,
+    pool: asyncpg.Pool,
+    user_id: int,
+    scope_type: str,
+    scope_id: int,
+) -> bool:
+    """处理 .clear：清空当前会话或全部会话的上下文。"""
+    del pool, scope_type, scope_id  # 权限检查在 HandleCommandStage 完成
+    parts = text.split()
+    target = parts[1].lower() if len(parts) > 1 else ""
+    usage = (
+        "用法: .clear assistant|user|all [global]\n"
+        "  assistant 只清机器人消息，user 只清用户消息，all 全部消息；\n"
+        "  默认只清当前会话，加 global 清理所有会话（仅 Master）"
+    )
+    if target not in ("assistant", "user", "all"):
+        await _reply(context, usage)
+        return True
+    extra = parts[2].lower() if len(parts) > 2 else ""
+    if extra and extra not in ("global", "all", "全局"):
+        await _reply(context, f"未知参数: {parts[2]}（只支持 global）")
+        return True
+    global_scope = bool(extra)
+    if global_scope and not permission.is_master(user_id):
+        await _reply(context, "只有 Master 可以清理全部会话的上下文")
+        return True
+
+    cleared = await context.message_service.store.clear_context(
+        conversation_id=None if global_scope else context.conversation_id,
+        target=target,
+    )
+    label = {"assistant": "机器人消息", "user": "用户消息", "all": "全部消息"}[target]
+    scope_text = "所有会话" if global_scope else "当前会话"
+    await _reply(context, f"已清除{scope_text}的{label}: {cleared} 条")
     return True
 
 

@@ -339,6 +339,36 @@ class MessageStore:
         )
         return [dict(row) for row in reversed(rows)]
 
+    async def clear_context(
+        self,
+        *,
+        conversation_id: int | None = None,
+        target: str = "all",
+    ) -> int:
+        """删除指定范围内的消息，相当于清空 LLM 上下文。
+
+        Args:
+            conversation_id: 会话 ID；None 表示所有会话。
+            target: "assistant" 只删机器人消息，"user" 只删用户消息，"all" 全删。
+        """
+        if target not in ("assistant", "user", "all"):
+            raise ValueError(f"unknown clear target: {target}")
+        conditions: list[str] = []
+        args: list[object] = []
+        if conversation_id is not None:
+            args.append(conversation_id)
+            conditions.append(f"conversation_id = ${len(args)}")
+        if target == "assistant":
+            conditions.append("source = 'sophos'")
+        elif target == "user":
+            conditions.append("source <> 'sophos'")
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        result = await self._pool.execute(f"DELETE FROM messages{where}", *args)
+        try:
+            return int(result.rsplit(" ", 1)[1])
+        except (IndexError, ValueError):
+            return 0
+
     async def query_by_time_range(
         self,
         *,

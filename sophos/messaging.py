@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from sophos import observability
 from sophos.adapter_router import AdapterRouter
@@ -21,15 +22,21 @@ logger = logging.getLogger(__name__)
 # 文本里出现换页符时拆成多条消息（多个气泡）；"\f" 不参与渲染。
 TEXT_BUBBLE_SEPARATOR = "\f"
 
+# 模型偶尔会把换页符写成两个字面字符（反斜杠 + f），这里一并识别为分隔符。
+# 前后要求不是 ASCII 字母/数字，避免把 "C:\foo" 这类路径误拆。
+_LITERAL_BUBBLE_SEPARATOR = re.compile(r"(?<![A-Za-z0-9])\\f(?![A-Za-z0-9])")
+
 
 def split_text_bubbles(text: str) -> list[str]:
     """按 ``\\f`` 把文本拆成多条气泡；没有分隔符时原样返回单条。"""
     if not text:
         return []
-    if TEXT_BUBBLE_SEPARATOR not in text:
-        return [text]
-    parts = [part.strip() for part in text.split(TEXT_BUBBLE_SEPARATOR)]
-    return [part for part in parts if part] or [text]
+    normalized = _LITERAL_BUBBLE_SEPARATOR.sub(TEXT_BUBBLE_SEPARATOR, text)
+    if TEXT_BUBBLE_SEPARATOR not in normalized:
+        return [normalized]
+    parts = [part.strip() for part in normalized.split(TEXT_BUBBLE_SEPARATOR)]
+    bubbles = [part for part in parts if part]
+    return bubbles or [text]
 
 
 class MessageService:

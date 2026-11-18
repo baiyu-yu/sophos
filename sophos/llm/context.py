@@ -13,6 +13,7 @@
 """
 
 import json
+import logging
 import re
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -22,7 +23,10 @@ from sophos.config import settings
 from sophos.llm.provider import Message
 from sophos.message_store import MessageStore
 
+logger = logging.getLogger(__name__)
+
 _RE_REPLY_PREFIX = re.compile(r"^\[回复[^\]]*\]\s*")
+_missing_message_placeholder_warned = False
 
 
 def _strip_reply_prefix(text: str) -> str:
@@ -196,14 +200,29 @@ def apply_schema(
     uid: str = "",
     message: str = "",
 ) -> str:
-    """应用 schema 模板，替换 {{placeholder}} 占位符。"""
-    return (
+    """应用 schema 模板，替换 {{placeholder}} 占位符。
+
+    模板缺少 ``{{message}}`` 时（常见于 .env 里未加引号、被 ``#`` 当成注释截断），
+    直接把正文追加到末尾，避免上下文里只剩时间戳/图片描述而丢失消息内容。
+    """
+    global _missing_message_placeholder_warned  # noqa: PLW0603
+    rendered = (
         schema.replace("{{time}}", time)
         .replace("{{mid}}", mid)
         .replace("{{name}}", name)
         .replace("{{uid}}", uid)
         .replace("{{message}}", message)
     )
+    if "{{message}}" not in schema and message:
+        if not _missing_message_placeholder_warned:
+            logger.warning(
+                "消息模板缺少 {{message}} 占位符（当前模板=%r），已把正文追加到末尾；"
+                "请检查 LLM_USER_SCHEMA/LLM_BOT_SCHEMA 是否被 .env 里的 # 注释截断（值需要加引号）",
+                schema,
+            )
+            _missing_message_placeholder_warned = True
+        return f"{rendered} {message}".strip()
+    return rendered
 
 
 def describe_schema(schema: str) -> str:

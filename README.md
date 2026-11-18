@@ -38,7 +38,9 @@ Vite 开发服务器监听 `5173` 并将 `/api` 代理到后端的 `8080` 端口
 - **触发正则**：WebUI「设置」页每行一条，群聊消息匹配任意一条正则即触发回复（不受 @ 与概率限制），支持 Python 正则、最多 50 条；也可在聊天里用 `.trigger regex add/remove/list/clear` 管理。
 - **模型服务商**：添加服务商后会自动拉取可用模型；在模型列表点「设为…」即可绑定到对话回复、信息收集、图片识别、触发判断或向量嵌入；卡片上的刷新按钮可重新获取模型列表。
 - **失败告警**：模型/工作流连续失败时不再向会话发送「模型服务暂时无响应」，而是静默记录；同一会话在 10 分钟内累计 3 次失败后，私信通知所有 Master。阈值、窗口与冷却可用 `.config failure_alert_threshold 5`、`.config failure_alert_window_seconds 600`、`.config failure_alert_cooldown_seconds 1800` 调整。
-- **多条气泡**：模型调用 `send_message` 时可在 `text` 里用换页符 `\f` 分隔，Sophos 会拆成多条消息依次发送（回复与 @ 只挂在第一条）。
+- **多条气泡**：模型调用 `send_message` 时可在 `text` 里用换页符 `\f` 分隔，Sophos 会拆成多条消息依次发送（回复与 @ 只挂在第一条）；模型如果输出的是字面量 `\f`（反斜杠 + f）也会被识别。
+- **清理上下文**：`.clear assistant|user|all` 只清理当前会话（`assistant` 只删机器人消息，`user` 只删用户消息）；加 `global` 清理所有会话，仅 Master 可用。
+- **消息模板**：`LLM_USER_SCHEMA` / `LLM_BOT_SCHEMA` 的值里含 `#`，在 `.env` 中必须用引号包起来（如 `LLM_USER_SCHEMA="[{{time}}] #{{mid}} {{name}}：{{message}}"`），否则 `#` 之后会被 dotenv 当成注释截断，导致上下文里只剩时间戳。模板缺少 `{{message}}` 时 Sophos 会把正文追加到末尾并打印警告。
 
 ## 权限与 Master
 
