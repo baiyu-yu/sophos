@@ -21,12 +21,30 @@ from sophos.llm.provider import (
     ProviderRequestOptions,
     UsageInfo,
 )
-from sophos.llm.schema import compile_openai_strict_tools
+from sophos.llm.schema import compile_gemini_safe_tools, compile_openai_strict_tools
 
 logger = logging.getLogger(__name__)
 
 # 自定义 TRACE 级别（与 main.py 一致）
 TRACE = 5
+
+# 上游把 OpenAI 的 tools 翻译成 Gemini function_declarations 后解析失败的典型报错。
+_GEMINI_SCHEMA_ERROR_MARKERS = (
+    "function_declarations",
+    "Starting an object on a scalar field",
+    "Invalid value at 'request.tools",
+)
+
+
+def _is_gemini_schema_error(exc: Exception) -> bool:
+    """判断异常是否为上游 Gemini 解析工具 schema 失败。"""
+    message = str(exc)
+    return any(marker in message for marker in _GEMINI_SCHEMA_ERROR_MARKERS)
+
+
+def _short_error(exc: Exception, limit: int = 240) -> str:
+    text = " ".join(str(exc).split())
+    return text[:limit] + ("…" if len(text) > limit else "")
 
 _STANDARD_MESSAGE_KEYS = {
     "system": ("role", "content"),
@@ -138,6 +156,9 @@ class OpenAICompatProvider(LLMProvider):
         self._stream = stream
         self._extra_body = extra_body or {}
         self._request_policy = request_policy or OpenAIRequestPolicy()
+        # 上游若按 Gemini Schema 解析 tools（OpenAI 兼容网关转发 Gemini），
+        # 一旦检测到就固定使用 Gemini 兼容投影，避免每次请求都先触发 400。
+        self._gemini_schema_mode = False
         self._session: aiohttp.ClientSession | None = None
 
     def _get_session(self) -> aiohttp.ClientSession:
@@ -180,6 +201,9 @@ class OpenAICompatProvider(LLMProvider):
                 if options.strict_tools
                 else tools
             )
+            if self._gemini_schema_mode:
+                # 已确认上游会按 Gemini Schema 解析，直接使用兼容投影，避免每次先失败。
+                payload["tools"] = compile_gemini_safe_tools(payload["tools"])
             payload["tool_choice"] = options.tool_choice
         elif options.tool_choice == "none":
             payload["tool_choice"] = "none"
@@ -209,18 +233,69 @@ class OpenAICompatProvider(LLMProvider):
         url = f"{self._base_url}/chat/completions"
         payload = self._build_payload(messages, tools, temperature, max_tokens, request_options)
 
-        session = self._get_session()
-        logger.log(TRACE, "LLM payload:\n%s", json.dumps(payload, ensure_ascii=False, indent=2))
-
         use_stream = self._stream and self._request_policy.allows("stream")
         if use_stream:
             payload["stream"] = True
-            logger.debug(
-                "LLM request (stream): model=%s, messages=%d, tools=%s",
-                self._model,
-                len(messages),
-                len(tools) if tools else 0,
+        logger.log(TRACE, "LLM payload:\n%s", json.dumps(payload, ensure_ascii=False, indent=2))
+        logger.debug(
+            "LLM request%s: model=%s, messages=%d, tools=%s",
+            " (stream)" if use_stream else "",
+            self._model,
+            len(messages),
+            len(tools) if tools else 0,
+        )
+
+        session = self._get_session()
+        try:
+            return await self._send(
+                session,
+                url,
+                payload,
+                use_stream=use_stream,
+                on_first_token=on_first_token,
             )
+        except RuntimeError as exc:
+            # 上游是 Gemini（或转发到 Gemini 的网关）时，OpenAI 风格的严格 schema
+            # （type 数组、additionalProperties 等）会被拒；改用 Gemini 兼容投影重试一次。
+            fallback = self._gemini_compat_payload(payload, exc)
+            if fallback is None:
+                raise
+            self._gemini_schema_mode = True
+            logger.warning(
+                "上游拒绝工具 schema（%s），改用 Gemini 兼容投影重试一次；后续请求将直接使用该投影",
+                _short_error(exc),
+            )
+            return await self._send(
+                session,
+                url,
+                fallback,
+                use_stream=use_stream,
+                on_first_token=on_first_token,
+            )
+
+    def _gemini_compat_payload(
+        self,
+        payload: dict[str, Any],
+        exc: Exception,
+    ) -> dict[str, Any] | None:
+        """构造 Gemini 兼容的请求体；不适用时返回 None。"""
+        tools = payload.get("tools")
+        if not tools or not _is_gemini_schema_error(exc):
+            return None
+        fallback = dict(payload)
+        fallback["tools"] = compile_gemini_safe_tools(tools)
+        return fallback
+
+    async def _send(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        payload: dict[str, Any],
+        *,
+        use_stream: bool,
+        on_first_token: FirstTokenCallback | None,
+    ) -> ChatResponse:
+        if use_stream:
             # sock_read = request_timeout：TTFT / 两个 chunk 之间的最大等待
             # total = sock_read × 5：宽松总超时，防止无限挂起
             timeout = aiohttp.ClientTimeout(
@@ -232,20 +307,13 @@ class OpenAICompatProvider(LLMProvider):
                     body = await resp.text()
                     raise RuntimeError(f"LLM API error {resp.status}: {body}")
                 return await self._consume_stream(resp, on_first_token=on_first_token)
-        else:
-            logger.debug(
-                "LLM request: model=%s, messages=%d, tools=%s",
-                self._model,
-                len(messages),
-                len(tools) if tools else 0,
-            )
-            timeout = aiohttp.ClientTimeout(total=self._request_timeout)
-            async with session.post(url, json=payload, timeout=timeout) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    raise RuntimeError(f"LLM API error {resp.status}: {body}")
-                data = await resp.json()
-            return self._parse_response(data)
+        timeout = aiohttp.ClientTimeout(total=self._request_timeout)
+        async with session.post(url, json=payload, timeout=timeout) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"LLM API error {resp.status}: {body}")
+            data = await resp.json()
+        return self._parse_response(data)
 
     async def _consume_stream(
         self,

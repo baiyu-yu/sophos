@@ -49,6 +49,30 @@ def compile_openai_strict_tools(
     return compiled
 
 
+def compile_gemini_safe_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rewrite OpenAI tools so Gemini-backed proxies can parse them.
+
+    OpenAI-compatible gateways that forward requests to Gemini translate the
+    JSON Schema themselves and choke on constructs that OpenAI accepts but
+    Gemini's ``Schema`` message does not, e.g. ``type: ["string", "null"]``
+    produced by strict mode or ``additionalProperties`` on free-form objects.
+    This helper projects every ``parameters`` through
+    :func:`compile_gemini_schema` and drops the OpenAI-only ``strict`` flag.
+    """
+    compiled: list[dict[str, Any]] = []
+    for tool in tools:
+        if tool.get("type") != "function":
+            compiled.append(tool)
+            continue
+        function = dict(tool.get("function") or {})
+        parameters = function.get("parameters")
+        if isinstance(parameters, dict):
+            function["parameters"] = compile_gemini_schema(parameters)
+        function.pop("strict", None)
+        compiled.append({"type": "function", "function": function})
+    return compiled
+
+
 def compile_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Compile canonical JSON Schema to Gemini's supported schema subset.
 
