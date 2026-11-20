@@ -305,6 +305,11 @@ class PluginAPI:
         return self._logger
 
     @property
+    def runtime(self) -> PluginRuntime:
+        """宿主运行时（注册表、消息服务、协议路由、连接池等）。"""
+        return self._runtime
+
+    @property
     def db(self) -> Any:
         """原始 asyncpg 连接池。
 

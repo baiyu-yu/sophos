@@ -155,6 +155,7 @@ def teardown():
 | `api.name` / `api.version` / `api.description` / `api.author` / `api.homepage` | 插件元数据 |
 | `api.metadata` | `PluginMetadata` 对象 |
 | `api.config` | 只读映射，等于 `default_config` 与数据库覆盖值的合并结果 |
+| `api.runtime` | 宿主运行时：`registry`、`adapter_router`、`message_service`、`pool`、`provider_mgr` 等（只读使用，不要替换） |
 | `api.logger` | `logging.Logger`，名称 `sophos.plugin.<name>` |
 | `api.tools` | 本插件当前注册的工具名列表 |
 
