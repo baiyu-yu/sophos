@@ -20,12 +20,15 @@ OneBot 11 接口。插件内置 SnowLuma 官方动作目录（222 个 action、1
 
 from __future__ import annotations
 
+import base64
 import difflib
 import importlib.util
 import json
+import re
 from pathlib import Path
 from typing import Any
 
+from sophos import media as media_store
 from sophos.platform import ConversationKind
 from sophos.plugins import PluginAPI, PluginMetadata
 
@@ -128,6 +131,65 @@ _PLACEHOLDER_BY_TYPE = {
     "string | object[]": ["<文本>"],
 }
 
+_URL_SCHEME_RE = re.compile(r"^(?:https?|base64|file)://", re.IGNORECASE)
+_WINDOWS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+# 这些 action 的图片参数需要图片内容；聊天上下文里的图片编码会自动转成 base64:// 再发给协议端。
+_IMAGE_CODE_ACTIONS = frozenset(
+    {
+        "set_qq_avatar",
+        "set_group_portrait",
+        "add_custom_face",
+        "ocr_image",
+        "upload_image_to_qun_album",
+        "_send_group_notice",
+    }
+)
+_IMAGE_FORMAT_HINT = "图片编码（聊天里的 [图片(编码)]）、http(s) URL 或 base64://"
+_FORMAT_BY_ROLE = {
+    "image": _IMAGE_FORMAT_HINT,
+    "file": "本地路径、http(s) URL 或 base64://",
+    "record": "本地路径、http(s) URL 或 base64://",
+    "video": "本地路径、http(s) URL 或 base64://",
+}
+
+
+def _is_direct_reference(text: str) -> bool:
+    """判断参数是否已经是协议端可直接使用的路径或 URL。"""
+    if _URL_SCHEME_RE.match(text):
+        return True
+    if text.startswith(("/", "./", "../", "~")):
+        return True
+    return bool(_WINDOWS_PATH_RE.match(text))
+
+
+def _resolve_image_param(value: Any) -> tuple[str, str | None]:
+    """把图片参数解析成协议端可用的形式。
+
+    返回 ``(kind, payload)``：``kind`` 为 ``code``（payload 是 base64:// 数据）、
+    ``direct``（原样透传）或 ``unknown``（无法识别成图片编码/地址）。
+    """
+    text = str(value or "").strip()
+    if not text or _is_direct_reference(text):
+        return ("direct", None)
+    found = media_store.read_image(text)
+    if found is None:
+        return ("unknown", None)
+    _code, _path, image_data = found
+    return ("code", "base64://" + base64.b64encode(image_data).decode("ascii"))
+
+
+def _redact_params(params: dict[str, Any], limit: int = 160) -> dict[str, Any]:
+    """日志与错误回显里截断过长的参数（如 base64 图片数据）。"""
+    redacted: dict[str, Any] = {}
+    for key, value in params.items():
+        if isinstance(value, str) and len(value) > limit:
+            redacted[key] = f"<{len(value)} 字符已省略>"
+        else:
+            redacted[key] = value
+    return redacted
+
+
 _TOOL_DESCRIPTION = f"""\
 调用 OneBot 11 协议端的任意接口（GET/POST action）。内置 SnowLuma 官方动作目录：
 {CATALOG_SOURCE}，共 {len(ACTIONS) or "多"} 个 action、{len(CATEGORIES) or 12} 个分类
@@ -149,6 +211,10 @@ _TOOL_DESCRIPTION = f"""\
 - params 是一个 JSON 对象字符串，例如 {{"group_id": 123456, "user_id": 12}}
 - 需要 group_id 的接口可省略，程序会自动填当前群号；user_id 内部 uid 会自动映射成 QQ 号
 - 所以改群名片通常只需：{{"action": "set_group_card", "params": {{"user_id": 12, "card": "新名片"}}}}
+- 图片参数（file/image，如 set_qq_avatar、set_group_portrait、add_custom_face、ocr_image、
+  upload_image_to_qun_album、_send_group_notice）可以直接填聊天里的图片编码
+  （上下文中的 [图片(编码)]），程序会自动转成 base64:// 再调用；也可以填 http(s) URL 或 base64://。
+  不要填协议端返回的 file 标识、也不要自己拼十六进制字符串。
 
 仅以下写操作被屏蔽（会让消息绕过 Sophos 入库/权限）：发消息/转发 → send_message；
 撤回 → recall_message；踢人/禁言 → moderate_member。需要时可在插件配置 blocked_actions 调整。
@@ -254,6 +320,9 @@ def _describe_action(action: str) -> dict[str, Any]:
         }
         if role:
             item["role"] = role
+        format_hint = _FORMAT_BY_ROLE.get(role)
+        if format_hint:
+            item["format"] = format_hint
         params.append(item)
     payload: dict[str, Any] = {
         "ok": True,
@@ -327,7 +396,7 @@ class OneBotApiPlugin:
 
     metadata = PluginMetadata(
         name="onebot_api",
-        version="1.3.0",
+        version="1.4.0",
         description="让模型自主调用 OneBot 11 协议端接口（内置 SnowLuma 222 个动作目录）",
         author="baiyu-yu",
         homepage="https://github.com/baiyu-yu/sophos",
@@ -553,6 +622,34 @@ class OneBotApiPlugin:
                             action,
                         )
                         call_params[name] = mapped
+                elif (
+                    role == "image"
+                    and action in _IMAGE_CODE_ACTIONS
+                    and not _is_missing(call_params.get(name))
+                ):
+                    # 聊天图片编码（上下文里的 [图片(编码)]）在本地有文件，转成 base64:// 给协议端。
+                    kind, resolved = _resolve_image_param(call_params[name])
+                    if kind == "unknown":
+                        raw_value = str(call_params[name]).strip()
+                        return {
+                            "ok": False,
+                            "action": action,
+                            "error": f"{name} 不是可用的图片地址: {raw_value[:80]}",
+                            "hint": (
+                                "图片参数需要本地路径、http(s) URL 或 base64://。"
+                                "如果图片来自聊天上下文，请直接填图片编码"
+                                "（上下文里 [图片(编码)] 括号中的编码），程序会自动转换；"
+                                "不要使用协议端返回的 file 标识或自行拼接的字符串。"
+                            ),
+                        }
+                    if kind == "code":
+                        call_params[name] = resolved
+                        api.logger.info(
+                            "onebot_call 图片编码转 base64 action=%s param=%s chars=%d",
+                            action,
+                            name,
+                            len(resolved or ""),
+                        )
 
             timeout = _bounded_int(api, "timeout", 30, 1, 120)
             limit = _bounded_int(api, "max_result_chars", 12000, 1000, 200000)
@@ -573,12 +670,15 @@ class OneBotApiPlugin:
                     timeout=float(timeout),
                 )
             except Exception as exc:  # 协议端错误、超时、未连接都转成工具错误
-                api.logger.warning("onebot_call 失败 action=%s params=%s: %s", action, call_params, exc)
+                redacted = _redact_params(call_params)
+                api.logger.warning(
+                    "onebot_call 失败 action=%s params=%s: %s", action, redacted, exc
+                )
                 payload: dict[str, Any] = {
                     "ok": False,
                     "action": action,
                     "error": str(exc) or type(exc).__name__,
-                    "params": call_params,
+                    "params": redacted,
                 }
                 retcode = getattr(exc, "retcode", None)
                 if retcode is not None:

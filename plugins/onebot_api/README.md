@@ -26,6 +26,20 @@
 {"action": "set_group_card", "params": {"user_id": 12, "card": "新名片"}}
 ```
 
+## 图片参数
+
+`set_qq_avatar`、`set_group_portrait`、`add_custom_face`、`ocr_image`、
+`upload_image_to_qun_album`、`_send_group_notice` 的图片参数除了本地路径、`http(s)` URL、
+`base64://` 之外，还可以直接填 **聊天里的图片编码**（上下文 `[图片(编码)]` 括号里的编码）：
+
+```json
+{"action": "set_qq_avatar", "params": {"file": "1a2b3c4d5e6f7a8b"}}
+```
+
+插件会从 Sophos 媒体目录读出该图片并转成 `base64://` 再发给协议端，所以换头像不需要模型自己找图片地址。
+如果填的值既不是路径/URL，也不在本地媒体目录里（例如协议端返回的图片 `file` 标识），
+会直接返回错误与提示，不会把无效参数发给协议端。
+
 ## 默认屏蔽
 
 只屏蔽会让消息绕过 Sophos 入库/权限链路的写操作，并提示对应的内置工具：

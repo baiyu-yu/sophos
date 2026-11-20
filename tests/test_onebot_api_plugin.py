@@ -1,8 +1,12 @@
 """onebot_api 插件（OneBot 11 通用接口调用）测试。"""
 
+import base64
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from sophos import media
 from sophos.adapter_router import AdapterRouter
 from sophos.platform import ConversationKind, ConversationRef
 from sophos.plugins import MemoryPluginStateStore, PluginManager
@@ -251,6 +255,49 @@ class OneBotApiPluginTests(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_source_is_reported(self) -> None:
         result = await self.registry.execute("onebot_api_docs", {}, self.context)
         self.assertIn("snowluma", result["source"].lower())
+
+    async def test_avatar_accepts_chat_image_code(self) -> None:
+        image_bytes = b"\x89PNG\r\n\x1a\nfake-avatar"
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(media, "media_root", lambda: Path(tmp)):
+            code = media.save_image_bytes(image_bytes, "image/png")
+            self.assertIsNotNone(code)
+            result = await self.registry.execute(
+                "onebot_call",
+                {"action": "set_qq_avatar", "params": {"file": code}},
+                self.context,
+            )
+        self.assertTrue(result["ok"], msg=str(result))
+        expected = "base64://" + base64.b64encode(image_bytes).decode("ascii")
+        self.assertEqual(result["data"]["params"]["file"], expected)
+
+    async def test_avatar_rejects_unknown_media_token(self) -> None:
+        token = "00f003f007f01fe03e6024c0cf813f00fb0ffe13f642c49f080800000"
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(media, "media_root", lambda: Path(tmp)):
+            result = await self.registry.execute(
+                "onebot_call",
+                {"action": "set_qq_avatar", "params": {"file": token}},
+                self.context,
+            )
+        self.assertFalse(result["ok"])
+        self.assertIn("图片编码", result["hint"])
+        self.assertIn("file 标识", result["hint"])
+
+    async def test_avatar_keeps_url(self) -> None:
+        url = "https://example.com/avatar.png"
+        result = await self.registry.execute(
+            "onebot_call",
+            {"action": "set_qq_avatar", "params": {"file": url}},
+            self.context,
+        )
+        self.assertTrue(result["ok"], msg=str(result))
+        self.assertEqual(result["data"]["params"]["file"], url)
+
+    async def test_docs_reports_image_param_format(self) -> None:
+        result = await self.registry.execute(
+            "onebot_api_docs", {"action": "set_qq_avatar"}, self.context
+        )
+        self.assertTrue(result["ok"])
+        self.assertIn("图片编码", result["params"][0]["format"])
 
 
 if __name__ == "__main__":
