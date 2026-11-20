@@ -53,6 +53,8 @@ WebUI「设置」页会列出全部运行时可调配置（按分组显示：身
 - `send_image(image_code, text="")`：把本地图片发回当前会话（可带文字）。
 - `save_image(image_code, upload=false)`：返回本地路径；`upload=true` 时上传到你配置的图床，返回长期可用的 URL。
 - `view_image(url)`：查看网络图片，同时会把图片落盘并返回 `code`，之后可以用 `send_image` 复用。
+  聊天里收到的图片请直接用 `image_code`（模型不应自己拼 URL）；`url` 只用于网页/搜索结果里实际看到的图片链接。
+- 图床配置**只**在 `save_image(upload=true)` 上传时使用，`view_image` 不会读取图床地址。
 
 图床在「设置 → 图片存储」配置：**图床地址**（multipart POST 接口）、**文件字段名**（默认 `file`）、**图床 Token**（以 `Authorization: Bearer <token>` 发送）。另外可设置「图片对外访问前缀」（如 `https://bot.example.com/media`），Sophos 自带 `GET /media/<文件名>` 公开访问路由，配合反代即可作为长期图片链接。
 

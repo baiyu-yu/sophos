@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 from sophos import image_host, media, runtime_config
 from sophos.platform import SentMessage
 from sophos.tools.media import SaveImageTool, SendImageTool
+from sophos.tools.web import ViewImageTool
 
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
@@ -123,6 +124,30 @@ class SaveImageToolTests(unittest.IsolatedAsyncioTestCase):
                 result = await SaveImageTool().execute({"image_code": code, "upload": True}, {})
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["url"], "https://img.example.com/i/abcdef.png")
+
+
+class ViewImageToolTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.tool = ViewImageTool()
+
+    def test_description_tells_model_not_to_build_urls(self) -> None:
+        text = self.tool.description
+        self.assertIn("image_code", text)
+        self.assertIn("不要自己构造", text)
+
+    async def test_unreachable_url_returns_image_code_hint(self) -> None:
+        result = await self.tool.execute(
+            {"url": "http://127.0.0.1:9/pic.png"}, {"vision_provider": object()}
+        )
+        self.assertIn("抓取失败", result["error"])
+        self.assertIn("image_code", result["hint"])
+
+    async def test_unknown_code_returns_hint(self) -> None:
+        result = await self.tool.execute(
+            {"image_code": "ffffffffffffffff"}, {"vision_provider": object()}
+        )
+        self.assertIn("尚未保存", result["error"])
+        self.assertIn("不要自己构造编码", result["hint"])
 
 
 class ImageHostPayloadTests(unittest.TestCase):

@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 _TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 _IMAGE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+_URL_HINT = (
+    "如果这张图片来自聊天上下文，请改用 image_code（上下文 [图片(编码): …] 里的编码，图片已存在本地）；"
+    "不要构造、拼接或猜测图片 URL。"
+)
 
 
 async def _tavily_request(tool: str, url: str, payload: dict, context: dict) -> dict:
@@ -160,8 +164,11 @@ class ViewImageTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "查看图片并返回视觉描述。传 url 抓取网络图片，或传 image_code 查看已保存的图片"
-            "（上下文里的 [图片(hash): …] 中的 hash）；网络图片会顺带保存到本地并返回 code。"
+            "查看图片并返回视觉描述。图片来自聊天上下文时，必须传 image_code"
+            "（上下文里的 [图片(编码): …] 中的编码，图片已经保存在本地）；"
+            "url 只用于你在网页或搜索结果里实际看到的图片链接，"
+            "不要自己构造、拼接或猜测图片 URL。"
+            "如果上下文里还没有编码（显示 [图片识别中]），等识别完成或直接依据已有描述回答，不要猜 URL。"
         )
 
     @property
@@ -169,10 +176,13 @@ class ViewImageTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "图片 URL（与 image_code 二选一）"},
+                "url": {
+                    "type": "string",
+                    "description": "网页/搜索结果里的图片链接；聊天里的图片请改用 image_code，不要自己拼 URL",
+                },
                 "image_code": {
                     "type": "string",
-                    "description": "已保存图片的编码（与 url 二选一）",
+                    "description": "聊天上下文 [图片(编码): …] 里的编码（本地已保存，可直接查看）",
                 },
             },
         }
@@ -190,7 +200,10 @@ class ViewImageTool(Tool):
 
             found = media.read_image(image_code)
             if found is None:
-                return {"error": "图片编码不存在或尚未保存到本地"}
+                return {
+                    "error": "图片编码不存在或尚未保存到本地",
+                    "hint": "编码必须是上下文 [图片(编码): …] 里的那串十六进制；不要自己构造编码。",
+                }
             code, _path, data = found
             mime_type = media.mime_for_path(_path)
         elif url:
@@ -200,18 +213,19 @@ class ViewImageTool(Tool):
                     session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp,
                 ):
                     if resp.status != 200:
-                        return {"error": f"HTTP {resp.status}"}
+                        return {"error": f"HTTP {resp.status}", "hint": _URL_HINT}
                     ct = resp.content_type or ""
                     if not ct.startswith("image/"):
-                        return {"error": f"非图片类型: {ct}"}
+                        return {"error": f"非图片类型: {ct}", "hint": _URL_HINT}
                     data = await resp.read()
                     if len(data) > _IMAGE_MAX_BYTES:
-                        return {"error": "图片过大（>10MB）"}
+                        return {"error": "图片过大（>10MB）", "hint": _URL_HINT}
             except Exception as e:
-                return {"error": f"抓取失败: {e}"}
+                logger.warning("view_image 抓取失败 url=%s: %s", url, e)
+                return {"error": f"抓取失败: {e}", "hint": _URL_HINT}
             mime_type = ct.split(";")[0].strip()
         else:
-            return {"error": "必须提供 url 或 image_code"}
+            return {"error": "必须提供 url 或 image_code", "hint": "聊天里的图片请用 image_code。"}
 
         from sophos import media
         from sophos.vision import compute_hash, describe_image
