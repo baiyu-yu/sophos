@@ -24,6 +24,11 @@ class _FakeAdapter:
         return {"action": action, "params": params, "timeout": timeout}
 
 
+class _FakeIdentity:
+    def __init__(self, external_user_id: str) -> None:
+        self.external_user_id = external_user_id
+
+
 class _FakePlatformStore:
     def __init__(self, kind: ConversationKind, external_id: str) -> None:
         self.kind = kind
@@ -38,6 +43,11 @@ class _FakePlatformStore:
             parent_conversation_id=None,
             display_name="测试群",
         )
+
+    async def get_identity_for_account(self, *, user_id: int, account_id: int):
+        if user_id == 3 and account_id == 7:
+            return _FakeIdentity("1004205930")
+        return None
 
 
 class _FakeMessageService:
@@ -120,6 +130,25 @@ class OneBotApiPluginTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(result["ok"])
         self.assertEqual(result["data"]["params"], {})
+
+    async def test_internal_user_id_is_mapped_to_external(self) -> None:
+        result = await self.registry.execute(
+            "onebot_call",
+            {"action": "set_group_card", "params": {"user_id": 3, "card": "新名片"}},
+            self.context,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["params"]["user_id"], 1004205930)
+        self.assertEqual(result["data"]["params"]["group_id"], 1027612238)
+
+    async def test_unknown_user_id_passes_through(self) -> None:
+        result = await self.registry.execute(
+            "onebot_call",
+            {"action": "set_group_card", "params": {"user_id": 999, "card": "x"}},
+            self.context,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["params"]["user_id"], 999)
 
     async def test_call_accepts_json_string_params(self) -> None:
         result = await self.registry.execute(

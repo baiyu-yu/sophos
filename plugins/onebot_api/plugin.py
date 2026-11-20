@@ -84,6 +84,26 @@ _GROUP_SCOPED_ACTIONS = frozenset(
     }
 )
 
+# 这些 action 的 user_id 是协议端账号（QQ 号），而模型看到的 {{uid}} 是 Sophos 内部 ID，
+# 调用前必须自动映射，否则会把内部 ID 当成 QQ 号发给协议端。
+_USER_SCOPED_ACTIONS = frozenset(
+    {
+        "set_group_card",
+        "set_group_kick",
+        "set_group_ban",
+        "set_group_admin",
+        "set_group_special_title",
+        "set_group_remark",
+        "set_group_anonymous_ban",
+        "get_group_member_info",
+        "get_stranger_info",
+        "get_group_shut_list",
+        "send_like",
+        "set_friend_add_request",
+        "set_group_add_request",
+    }
+)
+
 _ACTION_CATALOG = """\
 常用 action（参数名与协议端文档一致；不同实现的可用集合略有差异）：
 - 查询：get_status, get_version_info, get_login_info, get_friend_list, get_group_list,
@@ -111,8 +131,12 @@ _TOOL_DESCRIPTION = f"""\
 - 查询群成员 → 直接用本工具的 get_group_member_list（actor 节点没有内置查询工具）
 - 修改群名片 → 直接用本工具的 set_group_card
 
-需要 group_id 的接口如果在 params 里省略 group_id，会自动使用当前会话所在的群号，
-所以通常只需传其余参数，例如 {{"user_id": 10001, "card": "新名片"}}。
+需要 group_id 的接口如果在 params 里省略 group_id，会自动使用当前会话所在的群号；
+user_id 直接填上下文里用户名后面括号中的内部 uid（{{uid}}），程序会自动映射成协议端账号，
+不需要先查群成员列表，也不要自己猜 QQ 号。
+
+所以改群名片通常只需：
+{{"action": "set_group_card", "params": {{"user_id": 12, "card": "新名片"}}}}
 
 {_ACTION_CATALOG}
 
@@ -188,12 +212,36 @@ async def _current_group_id(api: PluginAPI, context: dict[str, Any]) -> int | No
         return None
 
 
+async def _map_internal_user_id(
+    api: PluginAPI, *, account_id: int | None, value: Any
+) -> int | str | None:
+    """把 Sophos 内部用户 ID 映射成协议端账号（QQ 号）；不认识的 ID 返回 None。"""
+    service = api.runtime.message_service
+    platform_store = getattr(service, "platform_store", None)
+    if platform_store is None or account_id is None:
+        return None
+    try:
+        internal_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    try:
+        identity = await platform_store.get_identity_for_account(
+            user_id=internal_id, account_id=int(account_id)
+        )
+    except Exception:  # 映射失败时按原值透传，让协议端报错
+        return None
+    if identity is None:
+        return None
+    external = str(identity.external_user_id)
+    return int(external) if external.isdigit() else external
+
+
 class OneBotApiPlugin:
     """把 OneBot 11 协议端接口暴露成一个通用工具。"""
 
     metadata = PluginMetadata(
         name="onebot_api",
-        version="1.1.0",
+        version="1.2.0",
         description="让模型自主调用 OneBot 11 协议端接口（仅屏蔽绕过消息入库的写操作）",
         author="baiyu-yu",
         homepage="https://github.com/baiyu-yu/sophos",
@@ -267,6 +315,21 @@ class OneBotApiPlugin:
                     account_id = int(account_id)
                 except (TypeError, ValueError):
                     return {"ok": False, "action": action, "error": "account_id 必须是整数"}
+            else:
+                accounts = api.protocol.accounts()
+                account_id = accounts[0] if accounts else None
+
+            if action in _USER_SCOPED_ACTIONS and call_params.get("user_id") is not None:
+                raw_user_id = call_params["user_id"]
+                mapped = await _map_internal_user_id(api, account_id=account_id, value=raw_user_id)
+                if mapped is not None and str(mapped) != str(raw_user_id):
+                    api.logger.info(
+                        "onebot_call 映射 user_id 内部=%s → 平台=%s action=%s",
+                        raw_user_id,
+                        mapped,
+                        action,
+                    )
+                    call_params["user_id"] = mapped
 
             timeout = _bounded_int(api, "timeout", 30, 1, 120)
             limit = _bounded_int(api, "max_result_chars", 12000, 1000, 200000)
