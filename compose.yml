@@ -37,6 +37,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./plugins:/app/plugins
+      - ./data/media:/app/data/media
     healthcheck:
       test:
         - CMD

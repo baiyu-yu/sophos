@@ -4,6 +4,7 @@ from sophos.api.routes.auth import routes as auth_routes
 from sophos.api.routes.connections import routes as connection_routes
 from sophos.api.routes.health import routes as health_routes
 from sophos.api.routes.logs import routes as log_routes
+from sophos.api.routes.media import routes as media_routes
 from sophos.api.routes.permissions import routes as permission_routes
 from sophos.api.routes.plugins import routes as plugin_routes
 from sophos.api.routes.prompts import routes as prompt_routes
@@ -19,6 +20,7 @@ def setup_routes(app, cors):
     app.router.add_routes(health_routes)
     app.router.add_routes(connection_routes)
     app.router.add_routes(log_routes)
+    app.router.add_routes(media_routes)
     app.router.add_routes(permission_routes)
     app.router.add_routes(plugin_routes)
     app.router.add_routes(prompt_routes)

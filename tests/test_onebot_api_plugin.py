@@ -62,9 +62,20 @@ class OneBotApiPluginTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result["ok"])
             self.assertIn("屏蔽", result["error"])
 
+    async def test_call_accepts_json_string_params(self) -> None:
+        result = await self.registry.execute(
+            "onebot_call",
+            {"action": "set_group_card", "params": '{"group_id": 1, "user_id": 2, "card": "x"}'},
+            self.context,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["data"]["params"], {"group_id": 1, "user_id": 2, "card": "x"}
+        )
+
     async def test_invalid_params_are_rejected(self) -> None:
         result = await self.registry.execute(
-            "onebot_call", {"action": "get_status", "params": [1]}, self.context
+            "onebot_call", {"action": "get_status", "params": "[1]"}, self.context
         )
         self.assertFalse(result["ok"])
         self.assertIn("params", result["error"])

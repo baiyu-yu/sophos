@@ -52,13 +52,49 @@ def compile_openai_strict_tools(
 def compile_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Compile canonical JSON Schema to Gemini's supported schema subset.
 
-    Gemini's native ``FunctionDeclaration.parameters`` schema rejects the
-    standard ``additionalProperties`` keyword.  Remove it at every schema node
-    without mutating the canonical tool definition.
+    Gemini's ``FunctionDeclaration.parameters`` (``google.ai.generativelanguage
+    .v1beta.Schema``) only understands a small subset of JSON Schema.  Unknown
+    keywords such as ``additionalProperties``, ``$defs`` or ``oneOf`` make the
+    API reject the whole request (for example ``Invalid value at
+    'request.tools[0].function_declarations[10].parameters.properties[3].value'
+    (required), Starting an object on a scalar field``).  This projection keeps
+    only supported keywords, flattens ``type`` arrays into ``nullable`` and
+    guarantees declared object properties, without mutating the canonical tool
+    definition.
     """
-    result = deepcopy(schema)
-    _compile_gemini_node(result)
-    return result
+    projected = _project_gemini_node(schema)
+    if not projected:
+        return {"type": "object", "properties": {}}
+    return projected
+
+
+# 参考 google.ai.generativelanguage v1beta Schema 的字段。
+_GEMINI_ALLOWED_KEYS = frozenset(
+    {
+        "type",
+        "format",
+        "title",
+        "description",
+        "nullable",
+        "enum",
+        "items",
+        "properties",
+        "required",
+        "anyOf",
+        "default",
+        "example",
+        "propertyOrdering",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+        "minLength",
+        "maxLength",
+        "pattern",
+    }
+)
 
 
 def strip_boundary_nulls(value: Any, canonical_schema: dict[str, Any]) -> Any:
@@ -79,31 +115,71 @@ def strip_boundary_nulls(value: Any, canonical_schema: dict[str, Any]) -> Any:
     return value
 
 
-def _compile_gemini_node(schema: Any) -> None:
+def _project_gemini_node(schema: Any) -> dict[str, Any]:
+    """把单个 JSON Schema 节点投影成 Gemini 支持的字段集合。"""
     if not isinstance(schema, dict):
-        return
+        return {}
 
-    schema.pop("additionalProperties", None)
+    source = dict(schema)
+    # Gemini 的 Schema 没有 const / oneOf / allOf，用等价写法替代。
+    if "const" in source and "enum" not in source:
+        source["enum"] = [source.pop("const")]
+    else:
+        source.pop("const", None)
+    if "oneOf" in source and "anyOf" not in source:
+        source["anyOf"] = source.pop("oneOf")
+    else:
+        source.pop("oneOf", None)
+    source.pop("allOf", None)
 
-    properties = schema.get("properties")
-    if isinstance(properties, dict):
-        for child in properties.values():
-            _compile_gemini_node(child)
+    node: dict[str, Any] = {}
+    for key in _GEMINI_ALLOWED_KEYS:
+        if key in source and source[key] is not None:
+            node[key] = source[key]
 
-    for keyword in ("items", "contains", "not", "if", "then", "else"):
-        _compile_gemini_node(schema.get(keyword))
+    schema_type = node.get("type")
+    if isinstance(schema_type, list):
+        non_null = [item for item in schema_type if isinstance(item, str) and item != "null"]
+        if "null" in schema_type:
+            node["nullable"] = True
+        node["type"] = non_null[0] if non_null else "string"
+    elif not isinstance(schema_type, str):
+        node.pop("type", None)
 
-    for keyword in ("anyOf", "oneOf", "allOf", "prefixItems"):
-        branches = schema.get(keyword)
-        if isinstance(branches, list):
-            for branch in branches:
-                _compile_gemini_node(branch)
+    properties = node.get("properties")
+    if isinstance(properties, dict) and properties:
+        node["properties"] = {name: _project_gemini_node(child) for name, child in properties.items()}
+        required = node.get("required")
+        if isinstance(required, list):
+            kept = [name for name in required if name in node["properties"]]
+            if kept:
+                node["required"] = kept
+            else:
+                node.pop("required", None)
+    else:
+        node.pop("properties", None)
+        node.pop("required", None)
 
-    for keyword in ("$defs", "definitions", "dependentSchemas", "patternProperties"):
-        definitions = schema.get(keyword)
-        if isinstance(definitions, dict):
-            for child in definitions.values():
-                _compile_gemini_node(child)
+    items = node.get("items")
+    if isinstance(items, dict):
+        node["items"] = _project_gemini_node(items)
+    elif isinstance(items, list):
+        node.pop("items", None)
+
+    branches = node.get("anyOf")
+    if isinstance(branches, list):
+        projected = [_project_gemini_node(branch) for branch in branches if isinstance(branch, dict)]
+        if projected:
+            node["anyOf"] = projected
+        else:
+            node.pop("anyOf", None)
+
+    # 自由格式的 object（无 properties）会让部分代理转译出非法 Schema，
+    # 统一补一个空的 properties 映射。
+    if node.get("type") == "object" and "properties" not in node:
+        node["properties"] = {}
+
+    return node
 
 
 def _close_objects(schema: Any) -> None:

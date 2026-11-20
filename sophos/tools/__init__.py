@@ -15,6 +15,7 @@ def load_builtin_tools() -> list[Tool]:
     之间形成循环依赖。
     """
     from sophos.tools.image_gen import IMAGE_GEN_TOOLS
+    from sophos.tools.media import MEDIA_TOOLS
     from sophos.tools.memory import MEMORY_TOOLS
     from sophos.tools.messaging import ALL_MESSAGING_TOOLS
     from sophos.tools.vision import VISION_TOOLS
@@ -24,6 +25,7 @@ def load_builtin_tools() -> list[Tool]:
         *ALL_MESSAGING_TOOLS,
         *MEMORY_TOOLS,
         *VISION_TOOLS,
+        *MEDIA_TOOLS,
         *WEB_TOOLS,
         *IMAGE_GEN_TOOLS,
     ]

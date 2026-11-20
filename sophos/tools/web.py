@@ -159,47 +159,86 @@ class ViewImageTool(Tool):
 
     @property
     def description(self) -> str:
-        return "查看网络图片。传入图片 URL，返回图片的视觉描述。抓取失败则返回错误。"
+        return (
+            "查看图片并返回视觉描述。传 url 抓取网络图片，或传 image_code 查看已保存的图片"
+            "（上下文里的 [图片(hash): …] 中的 hash）；网络图片会顺带保存到本地并返回 code。"
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "图片 URL"},
+                "url": {"type": "string", "description": "图片 URL（与 image_code 二选一）"},
+                "image_code": {
+                    "type": "string",
+                    "description": "已保存图片的编码（与 url 二选一）",
+                },
             },
-            "required": ["url"],
         }
 
     async def execute(self, params: dict[str, Any], context: dict[str, Any]) -> Any:
         vision_provider = context.get("vision_provider")
         if not vision_provider:
             return {"error": "vision provider 未配置"}
-        url = params["url"]
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp,
-            ):
-                if resp.status != 200:
-                    return {"error": f"HTTP {resp.status}"}
-                ct = resp.content_type or ""
-                if not ct.startswith("image/"):
-                    return {"error": f"非图片类型: {ct}"}
-                data = await resp.read()
-                if len(data) > _IMAGE_MAX_BYTES:
-                    return {"error": "图片过大（>10MB）"}
-        except Exception as e:
-            return {"error": f"抓取失败: {e}"}
-        mime_type = ct.split(";")[0].strip()
-        from sophos.vision import describe_image
+        code = ""
+        url = str(params.get("url") or "").strip()
+        image_code = str(params.get("image_code") or "").strip()
+
+        if image_code:
+            from sophos import media
+
+            found = media.read_image(image_code)
+            if found is None:
+                return {"error": "图片编码不存在或尚未保存到本地"}
+            code, _path, data = found
+            mime_type = media.mime_for_path(_path)
+        elif url:
+            try:
+                async with (
+                    aiohttp.ClientSession() as session,
+                    session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp,
+                ):
+                    if resp.status != 200:
+                        return {"error": f"HTTP {resp.status}"}
+                    ct = resp.content_type or ""
+                    if not ct.startswith("image/"):
+                        return {"error": f"非图片类型: {ct}"}
+                    data = await resp.read()
+                    if len(data) > _IMAGE_MAX_BYTES:
+                        return {"error": "图片过大（>10MB）"}
+            except Exception as e:
+                return {"error": f"抓取失败: {e}"}
+            mime_type = ct.split(";")[0].strip()
+        else:
+            return {"error": "必须提供 url 或 image_code"}
+
+        from sophos import media
+        from sophos.vision import compute_hash, describe_image
+
+        path = None
+        if not image_code:
+            try:
+                hash_str = await compute_hash(data)
+                if hash_str:
+                    saved = media.save_image_bytes(data, mime_type, code=hash_str)
+                    if saved:
+                        code = saved
+                        path = str(media.find_image(saved) or "")
+            except Exception as exc:  # 落盘失败不影响描述
+                logger.warning("view_image 保存图片失败: %s", exc)
 
         try:
             desc = await describe_image(vision_provider, data, mime_type)
         except Exception as e:
             logger.warning("VLM describe_image failed: %s", e)
             return {"error": f"VLM 描述失败: {e}"}
-        return {"description": desc}
+        out: dict[str, Any] = {"description": desc}
+        if code:
+            out["code"] = code
+            if path:
+                out["saved_path"] = path
+        return out
 
 
 WEB_TOOLS: list[Tool] = [

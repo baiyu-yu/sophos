@@ -74,6 +74,24 @@ def _bounded_int(api: PluginAPI, key: str, default: int, minimum: int, maximum: 
     return max(minimum, min(maximum, value))
 
 
+def _parse_params(raw: Any) -> dict[str, Any] | None:
+    """兼容 JSON 对象字符串 / 直接的 dict / 留空。"""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
 def _blocked_actions(api: PluginAPI) -> set[str]:
     raw = api.config.get("blocked_actions")
     if not isinstance(raw, (list, tuple, set)):
@@ -109,9 +127,11 @@ class OneBotApiPlugin:
                         "description": "OneBot 11 接口名，例如 get_group_list、send_like、upload_group_file",
                     },
                     "params": {
-                        "type": "object",
-                        "description": "该接口的原始参数对象，例如 {\"group_id\": 123456}",
-                        "additionalProperties": True,
+                        "type": "string",
+                        "description": (
+                            "该接口的原始参数，写成 JSON 对象字符串，例如 "
+                            '{"group_id": 123456, "user_id": 10001, "card": "新昵称"}'
+                        ),
                     },
                     "account_id": {
                         "type": "integer",
@@ -140,11 +160,13 @@ class OneBotApiPlugin:
                     "error": f"action {action} 已被插件配置屏蔽（内置工具已覆盖，或可在插件配置里移除）",
                 }
 
-            call_params = params.get("params")
+            call_params = _parse_params(params.get("params"))
             if call_params is None:
-                call_params = {}
-            if not isinstance(call_params, dict):
-                return {"ok": False, "action": action, "error": "params 必须是对象"}
+                return {
+                    "ok": False,
+                    "action": action,
+                    "error": "params 必须是 JSON 对象字符串，例如 {\"group_id\": 123456}",
+                }
 
             account_id = params.get("account_id")
             if account_id is not None:
@@ -172,8 +194,22 @@ class OneBotApiPlugin:
                     timeout=float(timeout),
                 )
             except Exception as exc:  # 协议端错误、超时、未连接都转成工具错误
-                api.logger.warning("onebot_call 失败 action=%s: %s", action, exc)
-                return {"ok": False, "action": action, "error": str(exc) or type(exc).__name__}
+                api.logger.warning("onebot_call 失败 action=%s params=%s: %s", action, call_params, exc)
+                payload: dict[str, Any] = {
+                    "ok": False,
+                    "action": action,
+                    "error": str(exc) or type(exc).__name__,
+                    "params": call_params,
+                }
+                retcode = getattr(exc, "retcode", None)
+                if retcode is not None:
+                    payload["retcode"] = retcode
+                    if retcode == 100:
+                        payload["hint"] = (
+                            "协议端认为参数无效（retcode=100）：请核对参数名与类型、目标是否在群内，"
+                            "以及机器人是否有对应权限（如管理员才能改群名片）"
+                        )
+                return payload
 
             payload: dict[str, Any] = {"ok": True, "action": action, "data": data}
             text = _dump(payload)

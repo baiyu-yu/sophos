@@ -18,7 +18,7 @@ from typing import Any
 import aiohttp
 import asyncpg
 
-from sophos import observability, prompts, runtime_config
+from sophos import media, observability, prompts, runtime_config
 from sophos.llm.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -277,6 +277,11 @@ async def process_image_segment(
     hash_str = await compute_hash(image_data)
     if hash_str is None:
         return {"status": "failed", "error": "图片哈希计算失败"}
+
+    # 落盘：上下文里的图片编码之后可以用来重新发送图片，不依赖临时 URL。
+    saved_code = media.save_image_bytes(image_data, mime_type, code=hash_str)
+    if saved_code is None:
+        logger.debug("Image hash=%s not persisted to media dir", hash_str)
 
     entry = await get_or_create_cache_entry(pool, hash_str)
 
