@@ -1,26 +1,61 @@
-"""OneBot 11 通用接口调用插件。
+"""OneBot 11 通用接口调用插件（SnowLuma 动作目录版）。
 
-让模型可以自主调用协议端（NapCat / Lagrange / go-cqhttp / LLOneBot 等）的任意
-OneBot 11 接口。只默认屏蔽「会让消息绕过 Sophos 入库/权限链路」的写操作
-（发消息、撤回、踢人、禁言），其余接口——尤其是查询类——都允许直接调用。
+让模型可以自主调用协议端（SnowLuma / NapCat / Lagrange / LLOneBot 等）的任意
+OneBot 11 接口。插件内置 SnowLuma 官方动作目录（222 个 action、12 个分类），
+用于：
 
-注意：actor 节点只挂输出类工具，`list_conversation_members` 之类的内置查询工具
-在该节点并不可用，所以查询类接口必须允许本工具调用，否则模型查不到群号/成员。
-群相关接口缺少 `group_id` 时会自动用当前会话的群号补全。
+* 校验 action 名并提供拼写建议（避免模型臆造接口）；
+* ``onebot_api_docs`` 工具按关键词/分类/名称查询参数与示例；
+* 按参数 ``role`` 自动补全 ``group_id``（当前群号）与 ``user_id``（内部 uid → 平台账号）。
+
+只默认屏蔽「会让消息绕过 Sophos 入库/权限链路」的写操作（发消息、转发、撤回、
+踢人、禁言、原始包），其余接口——尤其是查询类——都允许直接调用。
 
 插件配置（WebUI 插件页 → 配置）：
-  - blocked_actions: 禁止调用的 action 列表，默认只屏蔽绕过消息入库/权限的写操作
-  - timeout:         单次调用超时秒数（1–120，默认 30）
-  - max_result_chars: 返回结果最大字符数，超出截断（1000–200000，默认 12000）
+  - blocked_actions:      禁止调用的 action 列表，默认只屏蔽绕过消息入库/权限的写操作
+  - allow_unknown_actions: 允许调用目录中没有的 action（默认 false，避免拼错）
+  - timeout:              单次调用超时秒数（1–120，默认 30）
+  - max_result_chars:     返回结果最大字符数，超出截断（1000–200000，默认 12000）
 """
 
 from __future__ import annotations
 
+import difflib
+import importlib.util
 import json
+from pathlib import Path
 from typing import Any
 
 from sophos.platform import ConversationKind
 from sophos.plugins import PluginAPI, PluginMetadata
+
+
+def _load_catalog() -> Any:
+    """加载随插件分发的动作目录（目录安装用相对导入，单文件安装回退到同目录文件）。"""
+    try:
+        from . import actions as catalog  # type: ignore[import-not-found]
+
+        return catalog
+    except Exception:  # 单文件安装或缺少包上下文
+        path = Path(__file__).with_name("actions.py")
+        if not path.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location("sophos_onebot_actions", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+_catalog = _load_catalog()
+ACTIONS: dict[str, dict[str, Any]] = dict(getattr(_catalog, "ACTIONS", {}) or {})
+CATEGORIES: tuple[str, ...] = tuple(getattr(_catalog, "CATEGORIES", ()) or ())
+CATEGORY_ACTIONS: dict[str, tuple[str, ...]] = dict(getattr(_catalog, "CATEGORY_ACTIONS", {}) or {})
+CATALOG_SOURCE: str = str(getattr(_catalog, "CATALOG_SOURCE", "unknown"))
+ALIASES: dict[str, str] = {
+    str(alias): name for name, spec in ACTIONS.items() for alias in spec.get("aliases", ())
+}
 
 # 只屏蔽会让消息绕过 Sophos 入库/权限链路的写操作；查询类接口一律放行。
 DEFAULT_BLOCKED_ACTIONS = [
@@ -29,6 +64,15 @@ DEFAULT_BLOCKED_ACTIONS = [
     "send_private_msg",
     "send_group_forward_msg",
     "send_private_forward_msg",
+    "send_forward_msg",
+    "upload_forward_msg",
+    "upload_foward_msg",
+    "forward_group_single_msg",
+    "forward_friend_single_msg",
+    "send_flash_msg",
+    "send_custom_face",
+    "send_group_ai_record",
+    "send_packet",
     "delete_msg",
     "set_group_kick",
     "set_group_ban",
@@ -41,106 +85,75 @@ _BUILTIN_EQUIVALENTS = {
     "send_private_msg": "send_message",
     "send_group_forward_msg": "send_message",
     "send_private_forward_msg": "send_message",
+    "send_forward_msg": "send_message",
+    "upload_forward_msg": "send_message",
+    "upload_foward_msg": "send_message",
+    "forward_group_single_msg": "send_message",
+    "forward_friend_single_msg": "send_message",
+    "send_flash_msg": "send_message",
+    "send_custom_face": "send_image（发送表情图片）或 send_message",
     "delete_msg": "recall_message",
     "set_group_kick": "moderate_member(action=kick)",
     "set_group_ban": "moderate_member(action=ban)",
 }
 
-# 这些 action 需要 group_id；模型只知道自己所在会话，缺省时用当前群号补全。
-_GROUP_SCOPED_ACTIONS = frozenset(
-    {
-        "get_group_info",
-        "get_group_member_list",
-        "get_group_member_info",
-        "get_group_honor_info",
-        "get_group_shut_list",
-        "get_group_msg_history",
-        "get_group_root_files",
-        "get_group_files_by_folder",
-        "get_group_file_url",
-        "get_group_file_system_info",
-        "get_group_at_all_remain",
-        "set_group_card",
-        "set_group_name",
-        "set_group_kick",
-        "set_group_ban",
-        "set_group_whole_ban",
-        "set_group_admin",
-        "set_group_leave",
-        "set_group_special_title",
-        "set_group_add_request",
-        "set_group_remark",
-        "set_group_anonymous",
-        "set_group_anonymous_ban",
-        "set_group_sign",
-        "upload_group_file",
-        "create_group_file_folder",
-        "delete_group_file",
-        "delete_group_folder",
-        "move_group_file",
-        "get_essence_msg_list",
-        "set_essence_msg",
-        "delete_essence_msg",
-    }
-)
+_PLACEHOLDER_BY_ROLE = {
+    "group_id": "<当前群号，可省略>",
+    "user_id": "<内部 uid，程序会自动映射成平台账号>",
+    "member_id": "<内部 uid，程序会自动映射成平台账号>",
+    "message_id": "<消息 ID>",
+    "file_id": "<文件 ID>",
+    "image": "<图片文件/URL>",
+    "file": "<文件路径>",
+    "record": "<语音文件>",
+    "video": "<视频文件>",
+    "face_id": "<表情 ID>",
+    "timestamp": "<时间戳>",
+    "duration": "<时长秒>",
+}
 
-# 这些 action 的 user_id 是协议端账号（QQ 号），而模型看到的 {{uid}} 是 Sophos 内部 ID，
-# 调用前必须自动映射，否则会把内部 ID 当成 QQ 号发给协议端。
-_USER_SCOPED_ACTIONS = frozenset(
-    {
-        "set_group_card",
-        "set_group_kick",
-        "set_group_ban",
-        "set_group_admin",
-        "set_group_special_title",
-        "set_group_remark",
-        "set_group_anonymous_ban",
-        "get_group_member_info",
-        "get_stranger_info",
-        "get_group_shut_list",
-        "send_like",
-        "set_friend_add_request",
-        "set_group_add_request",
-    }
-)
-
-_ACTION_CATALOG = """\
-常用 action（参数名与协议端文档一致；不同实现的可用集合略有差异）：
-- 查询：get_status, get_version_info, get_login_info, get_friend_list, get_group_list,
-  get_group_info, get_group_member_info, get_stranger_info, get_msg, get_forward_msg,
-  get_group_msg_history, get_friend_msg_history, get_recent_contact, get_group_honor_info,
-  get_group_shut_list, get_essence_msg_list, get_group_at_all_remain, get_cookies,
-  get_csrf_token, get_credentials, get_profile_like, get_unidirectional_friend_list
-- 消息：send_like, mark_msg_as_read, set_essence_msg, delete_essence_msg,
-  send_group_forward_msg, send_private_forward_msg, send_group_sign, set_group_sign
-- 群管理：set_group_whole_ban, set_group_admin, set_group_card, set_group_leave,
-  set_group_special_title, set_group_add_request, set_friend_add_request,
-  set_group_anonymous, set_group_anonymous_ban, set_group_remark
-- 文件：upload_group_file, upload_private_file, get_group_file_url, get_group_root_files,
-  get_group_files_by_folder, get_group_file_system_info, create_group_file_folder,
-  delete_group_file, delete_group_folder, move_group_file
-- 账号/系统：set_self_longnick, set_online_status, set_input_status, set_restart,
-  clean_cache, get_status"""
+_PLACEHOLDER_BY_TYPE = {
+    "uint": 1,
+    "int": 1,
+    "number": 1,
+    "string": "<文本>",
+    "messageId": "<消息 ID>",
+    "bool": True,
+    "object": {},
+    "raw": {},
+    "enum": "<枚举值>",
+    "string[]": ["<文本>"],
+    "uint[]": [1],
+    "message": [{"type": "text", "data": {"text": "<文本>"}}],
+    "string | object[]": ["<文本>"],
+}
 
 _TOOL_DESCRIPTION = f"""\
-调用 OneBot 11 协议端的任意接口（GET/POST action）。查询类接口（群列表、群成员、群信息、
-历史消息、文件列表等）都可以直接调用；只有会让消息绕过 Sophos 入库/权限的写操作被屏蔽：
-- 回复/发送当前会话消息 → send_message（send_msg / send_group_msg / send_private_msg 被屏蔽）
-- 撤回消息 → recall_message（delete_msg 被屏蔽）
-- 踢人/禁言 → moderate_member（set_group_kick / set_group_ban 被屏蔽）
-- 查询群成员 → 直接用本工具的 get_group_member_list（actor 节点没有内置查询工具）
-- 修改群名片 → 直接用本工具的 set_group_card
+调用 OneBot 11 协议端的任意接口（GET/POST action）。内置 SnowLuma 官方动作目录：
+{CATALOG_SOURCE}，共 {len(ACTIONS) or "多"} 个 action、{len(CATEGORIES) or 12} 个分类
+（{'、'.join(CATEGORIES) or '信息、消息、群信息、群管理、扩展…'}）。
 
-需要 group_id 的接口如果在 params 里省略 group_id，会自动使用当前会话所在的群号；
-user_id 直接填上下文里用户名后面括号中的内部 uid（{{uid}}），程序会自动映射成协议端账号，
-不需要先查群成员列表，也不要自己猜 QQ 号。
+不确定 action 名或参数时，先调用 onebot_api_docs：
+- onebot_api_docs(keyword="公告")  → 按关键词搜索
+- onebot_api_docs(category="群管理") → 列出某类动作
+- onebot_api_docs(action="set_group_card") → 查看参数、是否只读与示例
 
-所以改群名片通常只需：
-{{"action": "set_group_card", "params": {{"user_id": 12, "card": "新名片"}}}}
+常用直接调用：
+- 查询群成员：get_group_member_list（actor 节点没有内置查询工具，直接用本工具）
+- 查询群信息/群列表：get_group_info / get_group_list
+- 改群名片：set_group_card，params 只需 user_id（填上下文里用户名后面的内部 uid）
+- 群公告：_get_group_notice / _send_group_notice；精华：get_essence_msg_list
+- 群文件：get_group_root_files / upload_group_file / get_group_file_url
 
-{_ACTION_CATALOG}
+参数规则：
+- params 是一个 JSON 对象字符串，例如 {{"group_id": 123456, "user_id": 12}}
+- 需要 group_id 的接口可省略，程序会自动填当前群号；user_id 内部 uid 会自动映射成 QQ 号
+- 所以改群名片通常只需：{{"action": "set_group_card", "params": {{"user_id": 12, "card": "新名片"}}}}
 
-返回值为协议端响应中的 data 字段；调用失败时返回 ok=false 与 error。"""
+仅以下写操作被屏蔽（会让消息绕过 Sophos 入库/权限）：发消息/转发 → send_message；
+撤回 → recall_message；踢人/禁言 → moderate_member。需要时可在插件配置 blocked_actions 调整。
+
+返回协议端响应中的 data 字段；失败返回 ok=false 与 error（含 retcode 与排查提示）。"""
 
 
 def _dump(value: Any) -> str:
@@ -183,6 +196,10 @@ def _blocked_actions(api: PluginAPI) -> set[str]:
     return {str(item).strip() for item in raw if str(item).strip()}
 
 
+def _allow_unknown(api: PluginAPI) -> bool:
+    return bool(api.config.get("allow_unknown_actions", False))
+
+
 def _blocked_message(action: str) -> str:
     equivalent = _BUILTIN_EQUIVALENTS.get(action)
     if equivalent:
@@ -191,6 +208,71 @@ def _blocked_message(action: str) -> str:
             f"（避免绕过消息入库/权限校验）；如确需直接调用，可在插件配置 blocked_actions 中移除 {action}"
         )
     return f"action {action} 已被插件配置 blocked_actions 屏蔽；移除该项即可调用"
+
+
+def _action_params(action: str) -> tuple[tuple[str, bool, str, str, str], ...]:
+    return tuple(ACTIONS.get(action, {}).get("params", ()))
+
+
+def _role_params(action: str, roles: set[str]) -> tuple[str, ...]:
+    return tuple(param[0] for param in _action_params(action) if param[3] in roles)
+
+
+def _resolve_action(action: str) -> str:
+    return ALIASES.get(action, action)
+
+
+def _suggest_actions(action: str, limit: int = 3) -> list[str]:
+    if not ACTIONS:
+        return []
+    return difflib.get_close_matches(action, list(ACTIONS), n=limit, cutoff=0.55)
+
+
+def _example_params(action: str) -> dict[str, Any]:
+    example: dict[str, Any] = {}
+    for name, required, type_name, role, _description in _action_params(action):
+        if not required:
+            continue
+        placeholder = _PLACEHOLDER_BY_ROLE.get(role)
+        if placeholder is None:
+            placeholder = _PLACEHOLDER_BY_TYPE.get(type_name, "<值>")
+        example[name] = placeholder
+    return example
+
+
+def _describe_action(action: str) -> dict[str, Any]:
+    spec = ACTIONS.get(action)
+    if spec is None:
+        return {}
+    params = []
+    for name, required, type_name, role, description in spec.get("params", ()):
+        item: dict[str, Any] = {
+            "name": name,
+            "required": required,
+            "type": type_name or "any",
+            "description": description,
+        }
+        if role:
+            item["role"] = role
+        params.append(item)
+    payload: dict[str, Any] = {
+        "ok": True,
+        "source": CATALOG_SOURCE,
+        "action": action,
+        "category": spec.get("category", ""),
+        "summary": spec.get("summary", ""),
+        "read_only": bool(spec.get("read_only", False)),
+        "blocked": action in DEFAULT_BLOCKED_ACTIONS,
+        "params": params,
+        "example": {"action": action, "params": _example_params(action)},
+    }
+    equivalent = _BUILTIN_EQUIVALENTS.get(action)
+    if equivalent:
+        payload["builtin_equivalent"] = equivalent
+    aliases = tuple(spec.get("aliases") or ())
+    if aliases:
+        payload["aliases"] = list(aliases)
+    return payload
 
 
 async def _current_group_id(api: PluginAPI, context: dict[str, Any]) -> int | None:
@@ -236,23 +318,138 @@ async def _map_internal_user_id(
     return int(external) if external.isdigit() else external
 
 
+def _is_missing(value: Any) -> bool:
+    return value is None or value == "" or value == 0
+
+
 class OneBotApiPlugin:
-    """把 OneBot 11 协议端接口暴露成一个通用工具。"""
+    """把 OneBot 11 协议端接口暴露成通用工具，并附带动作目录查询。"""
 
     metadata = PluginMetadata(
         name="onebot_api",
-        version="1.2.0",
-        description="让模型自主调用 OneBot 11 协议端接口（仅屏蔽绕过消息入库的写操作）",
+        version="1.3.0",
+        description="让模型自主调用 OneBot 11 协议端接口（内置 SnowLuma 222 个动作目录）",
         author="baiyu-yu",
         homepage="https://github.com/baiyu-yu/sophos",
         default_config={
             "blocked_actions": DEFAULT_BLOCKED_ACTIONS,
+            "allow_unknown_actions": False,
             "timeout": 30,
             "max_result_chars": 12000,
         },
     )
 
     def setup(self, api: PluginAPI) -> None:
+        @api.tool(
+            name="onebot_api_docs",
+            description=(
+                "查询 OneBot 动作文档（SnowLuma 目录）。不传参数列出分类；传 keyword 按关键词搜索；"
+                "传 category 列出某类动作；传 action 查看该接口的说明、参数类型、是否只读与示例。"
+                "调用 onebot_call 前不确定 action 名或参数时先用它，能避免拼错接口名。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "要查询的 action 名，例如 get_group_member_list",
+                    },
+                    "keyword": {
+                        "type": "string",
+                        "description": "按关键词搜索 action 名与说明，例如 公告、文件、群名片",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": list(CATEGORIES) or ["信息", "消息", "群信息", "群管理", "扩展"],
+                        "description": "按分类过滤，例如 群管理、群文件、空间",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 60,
+                        "description": "搜索时最多返回多少条，默认 20",
+                    },
+                },
+            },
+            group="plugin",
+            category="input",
+        )
+        async def onebot_api_docs(params: dict[str, Any], context: dict[str, Any]) -> Any:
+            if not ACTIONS:
+                return {
+                    "ok": False,
+                    "error": "动作目录未随插件安装（缺少 actions.py），请以目录/zip 形式安装插件",
+                }
+            raw_action = str(params.get("action") or "").strip()
+            if raw_action:
+                action = _resolve_action(raw_action)
+                payload = _describe_action(action)
+                if payload:
+                    return payload
+                return {
+                    "ok": False,
+                    "action": raw_action,
+                    "error": f"未知 action: {raw_action}",
+                    "suggestions": _suggest_actions(raw_action),
+                    "hint": "可以用 keyword 搜索，例如 onebot_api_docs(keyword=\"群成员\")",
+                }
+
+            raw_category = str(params.get("category") or "").strip()
+            keyword = str(params.get("keyword") or "").strip()
+            limit = params.get("limit")
+            try:
+                limit_value = max(1, min(60, int(limit))) if limit is not None else 20
+            except (TypeError, ValueError):
+                limit_value = 20
+
+            if not keyword and not raw_category:
+                counts = {name: len(CATEGORY_ACTIONS.get(name, ())) for name in CATEGORIES}
+                samples = {
+                    name: list(CATEGORY_ACTIONS.get(name, ())[:6]) for name in CATEGORIES
+                }
+                return {
+                    "ok": True,
+                    "source": CATALOG_SOURCE,
+                    "total": len(ACTIONS),
+                    "categories": counts,
+                    "samples": samples,
+                    "hint": (
+                        "用 onebot_api_docs(keyword=\"关键词\") 搜索，"
+                        "或 onebot_api_docs(action=\"接口名\") 查看参数"
+                    ),
+                }
+
+            needle = keyword.lower()
+            matches: list[dict[str, Any]] = []
+            for name in sorted(ACTIONS):
+                spec = ACTIONS[name]
+                if raw_category and spec.get("category") != raw_category:
+                    continue
+                if needle and needle not in name.lower() and needle not in str(spec.get("summary", "")).lower():
+                    continue
+                matches.append(
+                    {
+                        "name": name,
+                        "summary": spec.get("summary", ""),
+                        "category": spec.get("category", ""),
+                        "read_only": bool(spec.get("read_only", False)),
+                        "blocked": name in DEFAULT_BLOCKED_ACTIONS,
+                    }
+                )
+
+            payload = {
+                "ok": True,
+                "source": CATALOG_SOURCE,
+                "total": len(matches),
+                "returned": min(len(matches), limit_value),
+                "actions": matches[:limit_value],
+            }
+            if len(matches) > limit_value:
+                payload["hint"] = f"结果共 {len(matches)} 条，已截断；可用更精确的关键词或 category 过滤"
+            if not matches:
+                payload["suggestions"] = _suggest_actions(keyword or raw_category)
+            return payload
+
         @api.tool(
             name="onebot_call",
             description=_TOOL_DESCRIPTION,
@@ -261,7 +458,10 @@ class OneBotApiPlugin:
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "OneBot 11 接口名，例如 get_group_list、send_like、upload_group_file",
+                        "description": (
+                            "OneBot 11 接口名，例如 get_group_member_list、set_group_card、"
+                            "upload_group_file；不确定时先用 onebot_api_docs 查询"
+                        ),
                     },
                     "params": {
                         "type": "string",
@@ -285,9 +485,24 @@ class OneBotApiPlugin:
             category="output",
         )
         async def onebot_call(params: dict[str, Any], context: dict[str, Any]) -> Any:
-            action = str(params.get("action") or "").strip()
-            if not action:
+            raw_action = str(params.get("action") or "").strip()
+            if not raw_action:
                 return {"ok": False, "action": "", "error": "action 不能为空"}
+
+            action = _resolve_action(raw_action)
+            if action != raw_action:
+                api.logger.info("onebot_call action 别名 %s → %s", raw_action, action)
+            if ACTIONS and action not in ACTIONS and not _allow_unknown(api):
+                return {
+                    "ok": False,
+                    "action": raw_action,
+                    "error": f"未知 action: {raw_action}（SnowLuma 目录中没有这个接口）",
+                    "suggestions": _suggest_actions(action),
+                    "hint": (
+                        "用 onebot_api_docs(keyword=...) 搜索可用 action；"
+                        "如果确实是协议端私有接口，可在插件配置中打开 allow_unknown_actions"
+                    ),
+                }
 
             blocked = _blocked_actions(api)
             if action in blocked:
@@ -301,14 +516,6 @@ class OneBotApiPlugin:
                     "error": "params 必须是 JSON 对象字符串，例如 {\"group_id\": 123456}",
                 }
 
-            if action in _GROUP_SCOPED_ACTIONS and not call_params.get("group_id"):
-                group_id = await _current_group_id(api, context)
-                if group_id is not None:
-                    call_params["group_id"] = group_id
-                    api.logger.info(
-                        "onebot_call 自动补全 group_id=%s action=%s", group_id, action
-                    )
-
             account_id = params.get("account_id")
             if account_id is not None:
                 try:
@@ -319,17 +526,33 @@ class OneBotApiPlugin:
                 accounts = api.protocol.accounts()
                 account_id = accounts[0] if accounts else None
 
-            if action in _USER_SCOPED_ACTIONS and call_params.get("user_id") is not None:
-                raw_user_id = call_params["user_id"]
-                mapped = await _map_internal_user_id(api, account_id=account_id, value=raw_user_id)
-                if mapped is not None and str(mapped) != str(raw_user_id):
-                    api.logger.info(
-                        "onebot_call 映射 user_id 内部=%s → 平台=%s action=%s",
-                        raw_user_id,
-                        mapped,
-                        action,
+            # 按目录里的参数 role 自动补全：group_id 用当前群号，user_id/member_id 映射内部 uid。
+            group_id: int | None = None
+            group_id_loaded = False
+            for name, _required, _type, role, _description in _action_params(action):
+                if role == "group_id" and _is_missing(call_params.get(name)):
+                    if not group_id_loaded:
+                        group_id = await _current_group_id(api, context)
+                        group_id_loaded = True
+                    if group_id is not None:
+                        call_params[name] = group_id
+                        api.logger.info(
+                            "onebot_call 自动补全 %s=%s action=%s", name, group_id, action
+                        )
+                elif role in {"user_id", "member_id"} and not _is_missing(call_params.get(name)):
+                    raw_user_id = call_params[name]
+                    mapped = await _map_internal_user_id(
+                        api, account_id=account_id, value=raw_user_id
                     )
-                    call_params["user_id"] = mapped
+                    if mapped is not None and str(mapped) != str(raw_user_id):
+                        api.logger.info(
+                            "onebot_call 映射 %s 内部=%s → 平台=%s action=%s",
+                            name,
+                            raw_user_id,
+                            mapped,
+                            action,
+                        )
+                        call_params[name] = mapped
 
             timeout = _bounded_int(api, "timeout", 30, 1, 120)
             limit = _bounded_int(api, "max_result_chars", 12000, 1000, 200000)
@@ -363,7 +586,8 @@ class OneBotApiPlugin:
                     if retcode == 100:
                         payload["hint"] = (
                             "协议端认为参数无效（retcode=100）：请核对参数名与类型、目标是否在群内，"
-                            "以及机器人是否有对应权限（如管理员才能改群名片）"
+                            "以及机器人是否有对应权限（如管理员才能改群名片）；"
+                            "可用 onebot_api_docs(action=...) 核对参数"
                         )
                 return payload
 

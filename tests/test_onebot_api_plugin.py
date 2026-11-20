@@ -73,11 +73,12 @@ class OneBotApiPluginTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.manager.close()
 
-    def test_plugin_registers_onebot_call(self) -> None:
+    def test_plugin_registers_tools(self) -> None:
         plugins = {item["name"]: item for item in self.manager.list_plugins()}
         self.assertIn("onebot_api", plugins)
         self.assertEqual(plugins["onebot_api"]["status"], "loaded")
         self.assertIn("onebot_call", plugins["onebot_api"]["tools"])
+        self.assertIn("onebot_api_docs", plugins["onebot_api"]["tools"])
 
     async def test_call_forwards_action_and_params(self) -> None:
         result = await self.registry.execute(
@@ -169,6 +170,87 @@ class OneBotApiPluginTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_action_is_rejected_by_registry(self) -> None:
         result = await self.registry.execute("onebot_call", {}, self.context)
         self.assertIn("缺少必填参数", result["error"])
+
+    async def test_unknown_action_is_rejected_with_suggestions(self) -> None:
+        result = await self.registry.execute(
+            "onebot_call", {"action": "get_group_member_lst"}, self.context
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("未知 action", result["error"])
+        self.assertIn("get_group_member_list", result["suggestions"])
+        self.assertIn("onebot_api_docs", result["hint"])
+
+    async def test_unknown_action_can_be_allowed_by_config(self) -> None:
+        await self.manager.set_config("onebot_api", {"allow_unknown_actions": True})
+        result = await self.registry.execute(
+            "onebot_call", {"action": "custom_vendor_action", "params": {}}, self.context
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["action"], "custom_vendor_action")
+
+    async def test_action_alias_is_resolved(self) -> None:
+        result = await self.registry.execute(
+            "onebot_call", {"action": "send_group_sign", "params": {"group_id": 5}}, self.context
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["action"], "set_group_sign")
+
+    async def test_docs_lists_categories(self) -> None:
+        result = await self.registry.execute("onebot_api_docs", {}, self.context)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["total"], 222)
+        self.assertIn("群管理", result["categories"])
+        self.assertGreater(result["categories"]["群管理"], 10)
+        self.assertIn("get_group_info", result["samples"]["群信息"])
+        self.assertEqual(len(result["samples"]["群管理"]), 6)
+
+    async def test_docs_describes_action_with_params_and_example(self) -> None:
+        result = await self.registry.execute(
+            "onebot_api_docs", {"action": "set_group_card"}, self.context
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["category"], "群管理")
+        names = [param["name"] for param in result["params"]]
+        self.assertEqual(names[:2], ["group_id", "user_id"])
+        roles = {param["name"]: param.get("role") for param in result["params"]}
+        self.assertEqual(roles["group_id"], "group_id")
+        self.assertIn("内部 uid", result["example"]["params"]["user_id"])
+
+    async def test_docs_marks_blocked_action(self) -> None:
+        result = await self.registry.execute(
+            "onebot_api_docs", {"action": "send_group_msg"}, self.context
+        )
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["blocked"])
+        self.assertEqual(result["builtin_equivalent"], "send_message")
+
+    async def test_docs_searches_by_keyword(self) -> None:
+        result = await self.registry.execute(
+            "onebot_api_docs", {"keyword": "公告"}, self.context
+        )
+        self.assertTrue(result["ok"])
+        names = [item["name"] for item in result["actions"]]
+        self.assertIn("_get_group_notice", names)
+        self.assertLessEqual(result["returned"], 20)
+
+    async def test_docs_filters_by_category_and_limit(self) -> None:
+        result = await self.registry.execute(
+            "onebot_api_docs", {"category": "群文件", "limit": 3}, self.context
+        )
+        self.assertTrue(result["ok"])
+        self.assertLessEqual(result["returned"], 3)
+        self.assertTrue(all(item["category"] == "群文件" for item in result["actions"]))
+
+    async def test_docs_unknown_action_returns_suggestions(self) -> None:
+        result = await self.registry.execute(
+            "onebot_api_docs", {"action": "get_group_member_lst"}, self.context
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("get_group_member_list", result["suggestions"])
+
+    async def test_catalog_source_is_reported(self) -> None:
+        result = await self.registry.execute("onebot_api_docs", {}, self.context)
+        self.assertIn("snowluma", result["source"].lower())
 
 
 if __name__ == "__main__":
